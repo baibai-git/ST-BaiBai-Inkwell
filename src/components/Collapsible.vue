@@ -11,6 +11,57 @@ const props = withDefaults(
 );
 
 const expanded = ref(props.open);
+const scheduledFrames = new WeakMap<HTMLElement, number>();
+
+function scheduleHeight(panel: HTMLElement, height: number): void {
+  const previousFrame = scheduledFrames.get(panel);
+  if (previousFrame !== undefined) window.cancelAnimationFrame(previousFrame);
+  const frame = window.requestAnimationFrame(() => {
+    scheduledFrames.delete(panel);
+    panel.style.height = `${height}px`;
+  });
+  scheduledFrames.set(panel, frame);
+}
+
+function clearScheduledFrame(panel: HTMLElement): void {
+  const frame = scheduledFrames.get(panel);
+  if (frame !== undefined) window.cancelAnimationFrame(frame);
+  scheduledFrames.delete(panel);
+}
+
+function beforeEnter(element: Element): void {
+  const panel = element as HTMLElement;
+  if (!panel.style.height) panel.style.height = '0px';
+}
+
+function enter(element: Element): void {
+  const panel = element as HTMLElement;
+  void panel.offsetHeight;
+  scheduleHeight(panel, panel.scrollHeight);
+}
+
+function afterEnter(element: Element): void {
+  const panel = element as HTMLElement;
+  clearScheduledFrame(panel);
+  panel.style.height = '';
+}
+
+function beforeLeave(element: Element): void {
+  const panel = element as HTMLElement;
+  panel.style.height = `${panel.getBoundingClientRect().height}px`;
+}
+
+function leave(element: Element): void {
+  const panel = element as HTMLElement;
+  void panel.offsetHeight;
+  scheduleHeight(panel, 0);
+}
+
+function afterLeave(element: Element): void {
+  const panel = element as HTMLElement;
+  clearScheduledFrame(panel);
+  panel.style.height = '';
+}
 </script>
 
 <template>
@@ -20,13 +71,21 @@ const expanded = ref(props.open);
       <slot name="badge" />
       <Icon name="chevron" class="bby-collapsible-chevron" />
     </button>
-    <div class="bby-collapsible-outer">
-      <div class="bby-collapsible-inner">
+    <Transition
+      name="bby-collapse"
+      @before-enter="beforeEnter"
+      @enter="enter"
+      @after-enter="afterEnter"
+      @before-leave="beforeLeave"
+      @leave="leave"
+      @after-leave="afterLeave"
+    >
+      <div v-show="expanded" class="bby-collapsible-outer">
         <div class="bby-collapsible-body">
           <slot />
         </div>
       </div>
-    </div>
+    </Transition>
   </section>
 </template>
 
@@ -74,24 +133,47 @@ const expanded = ref(props.open);
   transform: rotate(180deg);
 }
 
-.bby-collapsible-outer {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows var(--bby-duration) var(--bby-ease);
-}
-
-.bby-collapsible.is-open > .bby-collapsible-outer {
-  grid-template-rows: 1fr;
-}
-
-.bby-collapsible-inner {
-  min-height: 0;
+.bby-collapse-enter-active,
+.bby-collapse-leave-active {
   overflow: hidden;
+  transition:
+    height var(--bby-duration) var(--bby-ease),
+    opacity 0.2s var(--bby-ease);
+  will-change: height, opacity;
+}
+
+.bby-collapse-enter-active .bby-collapsible-body,
+.bby-collapse-leave-active .bby-collapsible-body {
+  transition:
+    transform var(--bby-duration) var(--bby-ease),
+    opacity 0.2s var(--bby-ease);
+  will-change: transform, opacity;
+}
+
+.bby-collapse-enter-from,
+.bby-collapse-leave-to,
+.bby-collapse-enter-from .bby-collapsible-body,
+.bby-collapse-leave-to .bby-collapsible-body {
+  opacity: 0;
+}
+
+.bby-collapse-enter-from .bby-collapsible-body,
+.bby-collapse-leave-to .bby-collapsible-body {
+  transform: translateY(-6px);
 }
 
 .bby-collapsible-body {
   padding: 14px 16px;
   border-top: 1px solid var(--bby-line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bby-collapse-enter-active,
+  .bby-collapse-leave-active,
+  .bby-collapse-enter-active .bby-collapsible-body,
+  .bby-collapse-leave-active .bby-collapsible-body {
+    transition-duration: 0.01ms;
+  }
 }
 
 @media (max-width: 640px) {

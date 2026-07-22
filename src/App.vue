@@ -19,6 +19,7 @@ import Collapsible from '@/components/Collapsible.vue';
 import Icon from '@/components/Icon.vue';
 import ModalMask from '@/components/ModalMask.vue';
 import PhrasePicker from '@/components/PhrasePicker.vue';
+import { replaceText, replaceTextWithRules, type ReplacementResult } from '@/replacement';
 import { buildFloorPreview } from '@/st/floorPreview';
 import { applyFloorText, openFloorInPen } from '@/st/openFloor';
 import {
@@ -53,6 +54,7 @@ const reviewDecision = ref<Record<number, 'accept' | 'reject'>>({});
 const generationError = ref('');
 const generating = ref(false);
 const saving = ref(false);
+const replacing = ref(false);
 const contextSummary = ref('');
 let requestController: AbortController | null = null;
 
@@ -60,7 +62,7 @@ const phrases = computed(() =>
   [...penSettings.phrases].sort((left, right) => Number(right.favorite) - Number(left.favorite)),
 );
 
-/* —— 工作台:段落标注是主体;整体要求与机械替换为顶部折叠区 —— */
+/* —— 工作台:段落标注是主体;整体要求与查找替换为顶部折叠区 —— */
 const generalFilled = computed(() => !!generalNote.value.trim() || globalPhraseIds.value.length > 0);
 const enabledRuleCount = computed(() => penSettings.replaceRules.filter(rule => rule.enabled).length);
 
@@ -389,7 +391,7 @@ function goToWorkspace(): void {
 }
 
 async function startReview(): Promise<void> {
-  if (generating.value || saving.value) return;
+  if (generating.value || saving.value || replacing.value) return;
   saveNote();
   if (!hasInstructions.value) {
     showToast('请先添加段落标注或整体要求');
@@ -464,7 +466,7 @@ function backToAnnotate(): void {
 }
 
 async function finishReview(): Promise<void> {
-  if (generating.value || saving.value) return;
+  if (generating.value || saving.value || replacing.value) return;
   if (ui.floor == null || !rewriteChanges.value.length) return;
   if (acceptedCount.value === 0) {
     closePen();
@@ -607,16 +609,66 @@ function removePhrase(): void {
   phraseDraft.value = null;
 }
 
-/* —— 机械替换:规则全局保存,勾选启用;执行逻辑还没接,现在只有界面 —— */
+/* —— 查找替换:快速替换当前楼层,或按顺序执行已启用的全局规则 —— */
 const ruleDraft = ref<ReplaceRule | null>(null);
 
-// 快速替换行:一次性查找替换的即时入口(功能待接,先做界面)
 const quickFind = ref('');
 const quickReplacement = ref('');
 const quickIsRegex = ref(false);
 
-function runQuickReplace(): void {
-  showToast('替换执行逻辑还没接，先看界面');
+async function applyReplacement(result: ReplacementResult): Promise<void> {
+  if (replacing.value || generating.value || saving.value) return;
+  if (ui.floor == null) {
+    showToast('当前楼层不可用');
+    return;
+  }
+  if (!result.count || result.text === ui.originalText) {
+    showToast(result.count ? '替换后内容没有变化' : '当前楼层没有匹配内容');
+    return;
+  }
+
+  const floor = ui.floor;
+  const originalText = ui.originalText;
+  const chatId = ui.chatId;
+  replacing.value = true;
+  try {
+    const applyResult = await applyFloorText(floor, originalText, result.text, chatId);
+    if (applyResult === 'chat-changed') {
+      showToast('当前聊天已经切换，不能执行替换');
+      return;
+    }
+    if (applyResult === 'floor-changed') {
+      showToast('楼层内容已经变化，请重新打开砚');
+      return;
+    }
+    if (applyResult !== 'saved') {
+      showToast('无法保存当前楼层');
+      return;
+    }
+
+    if (ui.floor === floor && ui.chatId === chatId) {
+      openFloorInPen(floor);
+    }
+    showToast(`已替换 ${result.count} 处`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '替换失败');
+  } finally {
+    replacing.value = false;
+  }
+}
+
+async function runQuickReplace(): Promise<void> {
+  try {
+    await applyReplacement(
+      replaceText(ui.originalText, {
+        pattern: quickFind.value,
+        replacement: quickReplacement.value,
+        isRegex: quickIsRegex.value,
+      }),
+    );
+  } catch (error) {
+    showToast(error instanceof Error ? `正则表达式无效：${error.message}` : '替换失败');
+  }
 }
 
 function saveQuickAsRule(): void {
@@ -655,8 +707,13 @@ function removeRule(): void {
   ruleDraft.value = null;
 }
 
-function runReplace(): void {
-  showToast('替换执行逻辑还没接，先看界面');
+async function runReplace(): Promise<void> {
+  const enabledRules = penSettings.replaceRules.filter(rule => rule.enabled);
+  try {
+    await applyReplacement(replaceTextWithRules(ui.originalText, enabledRules));
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '执行规则失败');
+  }
 }
 
 /* —— 自定义提示词:列表(破限/思维链),点开在弹窗里编辑大文本 —— */
@@ -812,7 +869,7 @@ function onOverlayClick(event: MouseEvent): void {
                   </section>
                 </Collapsible>
 
-                <Collapsible title="机械替换" class="bby-work-fold">
+                <Collapsible title="查找替换" class="bby-work-fold">
                   <template #badge>
                     <em v-if="enabledRuleCount" class="bby-tab-count">{{ enabledRuleCount }}</em>
                   </template>
@@ -823,7 +880,7 @@ function onOverlayClick(event: MouseEvent): void {
                           v-model="quickFind"
                           class="bby-input bby-mono"
                           type="text"
-                          placeholder="查找"
+                          placeholder="查找（正则支持 /pattern/gi）"
                         />
                         <input
                           v-model="quickReplacement"
@@ -840,7 +897,7 @@ function onOverlayClick(event: MouseEvent): void {
                         <button
                           class="bby-button bby-btn-sm"
                           type="button"
-                          :disabled="!quickFind"
+                          :disabled="replacing || !quickFind"
                           @click="saveQuickAsRule"
                         >
                           <Icon name="plus" /> 存为规则
@@ -848,10 +905,10 @@ function onOverlayClick(event: MouseEvent): void {
                         <button
                           class="bby-button bby-primary bby-btn-sm"
                           type="button"
-                          :disabled="!quickFind"
+                          :disabled="replacing || generating || saving || !quickFind"
                           @click="runQuickReplace"
                         >
-                          <Icon name="replace" /> 替换
+                          <Icon name="replace" /> {{ replacing ? '替换中…' : '替换' }}
                         </button>
                       </div>
                     </div>
@@ -899,10 +956,10 @@ function onOverlayClick(event: MouseEvent): void {
                         <button
                           class="bby-button bby-btn-sm"
                           type="button"
-                          :disabled="generating || !enabledRuleCount"
+                          :disabled="replacing || generating || saving || !enabledRuleCount"
                           @click="runReplace"
                         >
-                          <Icon name="replace" /> 执行规则
+                          <Icon name="replace" /> {{ replacing ? '执行中…' : '执行规则' }}
                         </button>
                       </div>
                     </div>
@@ -1045,17 +1102,17 @@ function onOverlayClick(event: MouseEvent): void {
                     v-if="ui.stage === 'annotate'"
                     class="bby-button bby-primary"
                     type="button"
-                    :disabled="generating || !hasInstructions"
+                    :disabled="generating || replacing || !hasInstructions"
                     @click="startReview"
                   >
                     <Icon :name="generating ? 'refresh' : 'bolt'" :class="{ 'bby-spin': generating }" />
                     {{ generating ? '生成中…' : '生成' }}
                   </button>
                   <template v-else>
-                    <button class="bby-button" type="button" :disabled="generating" @click="startReview">
+                    <button class="bby-button" type="button" :disabled="generating || replacing" @click="startReview">
                       <Icon name="refresh" :class="{ 'bby-spin': generating }" /> 重新生成
                     </button>
-                    <button class="bby-button bby-primary" type="button" :disabled="generating || saving" @click="finishReview">
+                    <button class="bby-button bby-primary" type="button" :disabled="generating || saving || replacing" @click="finishReview">
                       <Icon :name="acceptedCount === 0 ? 'trash' : 'check'" />
                       {{ saving ? '保存中…' : acceptedCount === 0 ? '丢弃全部' : `应用 ${acceptedCount} 段` }}
                     </button>
@@ -1389,7 +1446,7 @@ function onOverlayClick(event: MouseEvent): void {
         </label>
         <label class="bby-modal-field">
           <span class="bby-modal-label">匹配内容</span>
-          <input v-model="ruleDraft.pattern" class="bby-input bby-mono" placeholder="要查找的文字或正则表达式" />
+          <input v-model="ruleDraft.pattern" class="bby-input bby-mono" placeholder="文字、正则或 /pattern/gi" />
         </label>
         <label class="bby-modal-field">
           <span class="bby-modal-label">替换为</span>
@@ -1399,7 +1456,7 @@ function onOverlayClick(event: MouseEvent): void {
           <span class="bby-modal-label">使用正则表达式</span>
           <input v-model="ruleDraft.isRegex" type="checkbox" class="bby-checkbox" />
         </label>
-        <p v-if="ruleDraft.isRegex" class="bby-field-hint">全局替换所有匹配；可用 $1、$2 引用捕获组。</p>
+        <p v-if="ruleDraft.isRegex" class="bby-field-hint">支持纯表达式或 /表达式/gi；全局替换所有匹配，可用 $1、$2 引用捕获组。</p>
         <footer class="bby-modal-foot">
           <button class="bby-button bby-danger" type="button" @click="removeRule"><Icon name="trash" /> 删除</button>
           <span class="bby-modal-foot-spacer"></span>

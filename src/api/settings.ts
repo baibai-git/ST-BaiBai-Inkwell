@@ -16,7 +16,7 @@ export interface PenPrompts {
   chainOfThought: string;
 }
 
-/** 机械替换规则:对楼层全文做确定性查找替换,不经过 AI。 */
+/** 查找替换规则:对楼层全文做确定性替换,不经过 AI。 */
 export interface ReplaceRule {
   id: number;
   name: string;
@@ -87,7 +87,7 @@ function cloneDefaultQuickPhrases(): QuickPhrase[] {
   return DEFAULT_QUICK_PHRASES.map(phrase => ({ ...phrase }));
 }
 
-export const DEFAULT_REPLACE_RULES: readonly ReplaceRule[] = [
+const LEGACY_PLACEHOLDER_REPLACE_RULES: readonly ReplaceRule[] = [
   {
     id: 1,
     name: '统一省略号',
@@ -106,8 +106,15 @@ export const DEFAULT_REPLACE_RULES: readonly ReplaceRule[] = [
   },
 ];
 
-function cloneDefaultReplaceRules(): ReplaceRule[] {
-  return DEFAULT_REPLACE_RULES.map(rule => ({ ...rule }));
+function isLegacyPlaceholderReplaceRule(rule: ReplaceRule): boolean {
+  return LEGACY_PLACEHOLDER_REPLACE_RULES.some(
+    placeholder =>
+      rule.id === placeholder.id &&
+      rule.name === placeholder.name &&
+      rule.pattern === placeholder.pattern &&
+      rule.replacement === placeholder.replacement &&
+      rule.isRegex === placeholder.isRegex,
+  );
 }
 
 function normalizeReplaceRules(raw: unknown): ReplaceRule[] {
@@ -125,7 +132,8 @@ function normalizeReplaceRules(raw: unknown): ReplaceRule[] {
         enabled: rule.enabled !== false,
       };
     })
-    .filter(item => item.name.trim() && item.pattern);
+    .filter(item => item.name.trim() && item.pattern)
+    .filter(item => !isLegacyPlaceholderReplaceRule(item));
 }
 
 function normalizeQuickPhrases(raw: unknown): QuickPhrase[] {
@@ -153,7 +161,7 @@ function defaults(): PenSettings {
     quickPhraseDefaultsVersion: QUICK_PHRASE_DEFAULTS_VERSION,
     phrases: cloneDefaultQuickPhrases(),
     prompts: { jailbreak: '', chainOfThought: '' },
-    replaceRules: cloneDefaultReplaceRules(),
+    replaceRules: [],
   };
 }
 
@@ -185,10 +193,10 @@ export function normalizePenSettings(raw: unknown): PenSettings {
       chainOfThought:
         typeof value.prompts?.chainOfThought === 'string' ? value.prompts.chainOfThought : '',
     },
-    // 老设置里没有这个字段 → 给内置示例;用户自己删光的空数组则尊重
+    // 旧版本曾内置两条界面占位规则；加载时清理，之后规则库只保留用户规则。
     replaceRules: Array.isArray(value.replaceRules)
       ? normalizeReplaceRules(value.replaceRules)
-      : cloneDefaultReplaceRules(),
+      : [],
   };
 }
 

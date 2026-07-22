@@ -45,3 +45,44 @@ describe('default quick phrases', () => {
     ).toEqual([]);
   });
 });
+
+describe('replace rules', () => {
+  it('starts with an empty rule library', () => {
+    expect(normalizePenSettings({}).replaceRules).toEqual([]);
+  });
+
+  it('removes the two legacy placeholder rules and preserves user rules', () => {
+    const customRule = {
+      id: 9,
+      name: '自定义规则',
+      pattern: '旧名',
+      replacement: '新名',
+      isRegex: false,
+      enabled: true,
+    };
+
+    expect(
+      normalizePenSettings({
+        replaceRules: [
+          {
+            id: 1,
+            name: '统一省略号',
+            pattern: '\\.{3,}',
+            replacement: '……',
+            isRegex: true,
+            enabled: true,
+          },
+          {
+            id: 2,
+            name: '清理行尾空白',
+            pattern: '[ \\t]+$',
+            replacement: '',
+            isRegex: true,
+            enabled: false,
+          },
+          customRule,
+        ],
+      }).replaceRules,
+    ).toEqual([customRule]);
+  });
+});

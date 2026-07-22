@@ -236,7 +236,7 @@
   font-weight: 700;
 }
 
-/* 折叠角标:整体要求已填=小圆点;机械替换启用数=小号计数 */
+/* 折叠角标:整体要求已填=小圆点;查找替换启用数=小号计数 */
 .bby-tab-dot {
   flex: 0 0 auto;
   width: 6px;
@@ -257,7 +257,7 @@
   text-align: center;
 }
 
-/* —— 机械替换 —— */
+/* —— 查找替换 —— */
 
 /* 快速替换:即用即走的一次性查找替换台。查找 → 替换 用箭头串起,
    与规则预览的 pattern → replacement 呼应,是这块的视觉母题。 */
@@ -444,9 +444,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  /* 与设置页滚动区(.bby-settings-sections)保持同为 flex column:
-     block 流的滚动容器里 grid 折叠动画会触发 Chromium 绘制失效(内容展开却漏绘,
-     展开另一区强制重排后才恢复);flex 格式化上下文可规避,故与设置页复用同一套。 */
+  /* 与设置页滚动区(.bby-settings-sections)同为 flex column,两页复用同一套流式布局。 */
   display: flex;
   flex-direction: column;
   padding: 8px 28px 32px;
@@ -467,7 +465,7 @@
   background: var(--bby-surface);
 }
 
-/* 顶部折叠区:整体要求 / 机械替换,默认收起,不抢段落列表的位置 */
+/* 顶部折叠区:整体要求 / 查找替换,默认收起,不抢段落列表的位置 */
 .bby-work-fold {
   margin: 6px 0 10px;
 }
@@ -476,7 +474,7 @@
   margin-top: 0;
 }
 
-/* 执行规则条:机械替换折叠块内的独立后处理动作,与「生成」分开互不打架 */
+/* 执行规则条:查找替换折叠块内的独立后处理动作,与「生成」分开互不打架 */
 .bby-rule-run {
   display: flex;
   align-items: center;
@@ -487,7 +485,7 @@
   border-top: 1px solid var(--bby-line);
 }
 
-/* 子面板区块:整体要求 / 机械替换,现居于折叠块内,内边距由折叠体负责 */
+/* 子面板区块:整体要求 / 查找替换,现居于折叠块内,内边距由折叠体负责 */
 .bby-general-editor,
 .bby-replace-panel {
   display: flex;
@@ -495,7 +493,7 @@
   gap: 10px;
 }
 
-/* 机械替换:快速台与规则库两段,留白拉开一点 */
+/* 查找替换:快速台与规则库两段,留白拉开一点 */
 .bby-replace-panel {
   gap: 18px;
 }
@@ -1294,6 +1292,11 @@
   flex-direction: column;
   gap: 12px;
   padding: var(--bby-page-pad);
+}
+
+/* 多个设置区同时展开时保持各自自然高度，超出部分由父容器滚动。 */
+.bby-settings-sections > * {
+  flex: 0 0 auto;
 }
 
 .bby-setting-gap {

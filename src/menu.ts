@@ -3,8 +3,22 @@ import { getContext } from '@/st/context';
 import { penIconSvg } from '@/penIcon';
 
 const MENU_ITEM_ID = 'bby-menu-item';
+const MENU_STYLE_ID = 'bby-menu-item-style';
+
+function ensureMenuStyle(): void {
+  if (document.getElementById(MENU_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = MENU_STYLE_ID;
+  style.textContent = `
+#${MENU_ITEM_ID} {
+  align-items: center;
+}
+`;
+  document.head.append(style);
+}
 
 export function injectMenuButton(): void {
+  ensureMenuStyle();
   const tryInject = () => {
     const menu = $('#extensionsMenu');
     if (menu.length === 0) return false;

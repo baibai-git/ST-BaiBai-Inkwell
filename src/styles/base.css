@@ -1557,10 +1557,11 @@
   padding: var(--bby-page-pad);
 }
 
-/* —— 楼层列表(魔法棒入口):新的楼层在前,点行进入该楼编辑 —— */
+/* —— 楼层列表(魔法棒入口):新的楼层在前,点卡片进入该楼编辑 —— */
 .bby-floor-list {
   display: flex;
   flex-direction: column;
+  gap: 8px;
   margin-top: 12px;
 }
 
@@ -1569,66 +1570,25 @@
   margin-top: 0;
 }
 
+/* 楼层卡片:描边 + 纸面底色,悬停描边提亮 */
 .bby-floor-open {
   position: relative;
   width: 100%;
   min-width: 0;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 11px 10px;
-  border: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--bby-line);
   border-radius: var(--bby-radius);
-  background: none;
+  background: var(--bby-surface);
   color: var(--bby-ink);
   cursor: pointer;
   text-align: left;
-  transition: background var(--bby-duration) var(--bby-ease);
-}
-
-/* 相邻楼层之间用细分割线,而非卡片堆叠 —— 列表更整洁,像目录 */
-.bby-floor-open+.bby-floor-open {
-  border-top: 1px solid var(--bby-line);
+  transition: border-color var(--bby-duration) var(--bby-ease);
 }
 
 .bby-floor-open:hover {
-  background: var(--bby-accent-soft);
-}
-
-/* 楼层轨:左侧竖条(说话人色)+ 表格数字,像电梯楼层指示 */
-.bby-floor-rail {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  min-width: 42px;
-  padding: 2px 8px 2px 12px;
-}
-
-/* 竖条:Char 用强调色,User 用中性色 —— 一眼分辨谁说的,不靠填充底色 */
-.bby-floor-rail::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 3px;
-  bottom: 3px;
-  width: 2px;
-  border-radius: var(--bby-radius-pill);
-  background: var(--bby-accent);
-}
-
-.bby-floor-open.is-user .bby-floor-rail::before {
-  background: var(--bby-line-strong);
-}
-
-.bby-floor-num {
-  color: var(--bby-ink);
-  font-family: var(--bby-font-mono);
-  font-size: 17px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.3;
+  border-color: var(--bby-accent);
 }
 
 .bby-floor-main {
@@ -1636,34 +1596,41 @@
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 6px;
 }
 
-.bby-floor-byline {
+/* 标签行:楼层号 + 发送人身份(User/Char),统一小药丸标签 */
+.bby-floor-tags {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
 }
 
-.bby-floor-byline strong {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
+.bby-floor-tag {
+  flex: 0 0 auto;
+  padding: 2px 9px;
+  border-radius: var(--bby-radius-pill);
+  background: color-mix(in srgb, var(--bby-ink-muted) 16%, transparent);
+  color: var(--bby-ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   white-space: nowrap;
 }
 
-/* 说话人标签:与竖条互补,给一个明确的文字信号 */
-.bby-floor-role {
-  flex: 0 0 auto;
-  padding: 1px 8px;
-  border-radius: var(--bby-radius-pill);
+/* 楼层号:等宽数字 + 强调色,一眼定位 */
+.bby-floor-tag-num {
   background: var(--bby-accent-soft);
   color: var(--bby-accent);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-family: var(--bby-font-mono);
+}
+
+/* 发送人身份:Char 强调色,User 中性色 */
+.bby-floor-role {
+  background: var(--bby-accent-soft);
+  color: var(--bby-accent);
 }
 
 .bby-floor-open.is-user .bby-floor-role {
@@ -1671,21 +1638,15 @@
   color: var(--bby-ink-soft);
 }
 
-/* 隐藏楼层:小幽灵 + 整行淡化,扫一眼即可区分(不参与上下文) */
+/* 隐藏楼层:小幽灵 + 整卡淡化,扫一眼即可区分(不参与上下文) */
 .bby-floor-ghost {
   flex: 0 0 auto;
   color: var(--bby-ink-muted);
   font-size: 14px;
 }
 
-.bby-floor-open.is-hidden .bby-floor-num,
-.bby-floor-open.is-hidden .bby-floor-byline strong,
+.bby-floor-open.is-hidden .bby-floor-tag,
 .bby-floor-open.is-hidden .bby-floor-main small {
-  opacity: 0.5;
-}
-
-.bby-floor-open.is-hidden .bby-floor-rail::before {
-  background: var(--bby-ink-muted);
   opacity: 0.5;
 }
 
@@ -1693,8 +1654,8 @@
   display: -webkit-box;
   overflow: hidden;
   color: var(--bby-ink-muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.6;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }

@@ -1184,13 +1184,10 @@ function onOverlayClick(event: MouseEvent): void {
                       type="button"
                       @click="enterFloor(row.floor)"
                     >
-                      <span class="bby-floor-rail">
-                        <span class="bby-floor-num">{{ row.floor }}</span>
-                      </span>
                       <span class="bby-floor-main">
-                        <span class="bby-floor-byline">
-                          <strong>{{ row.name }}</strong>
-                          <span v-if="penSettings.showUserFloors" class="bby-floor-role">{{ row.isUser ? 'User' : 'Char' }}</span>
+                        <span class="bby-floor-tags">
+                          <span class="bby-floor-tag bby-floor-tag-num">#{{ row.floor }}</span>
+                          <span class="bby-floor-tag bby-floor-role">{{ row.isUser ? 'User' : 'Char' }}</span>
                           <Icon v-if="row.hidden" name="ghost" class="bby-floor-ghost" title="已隐藏楼层（不参与上下文）" />
                         </span>
                         <small>{{ row.preview }}</small>

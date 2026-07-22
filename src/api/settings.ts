@@ -59,26 +59,50 @@ export const DEFAULT_QUICK_PHRASES: readonly QuickPhrase[] = [
   },
   {
     id: 3,
+    name: '别老吃饭',
+    instruction: '角色没有这么爱吃饭，不要老是提起吃饭',
+    favorite: false,
+  },
+  {
+    id: 4,
     name: '禁老子',
     instruction: '不要使用老子自称',
     favorite: false,
   },
   {
-    id: 4,
+    id: 5,
     name: '禁投石',
     instruction: '不要出现石子投入湖面这样的描写，包括其变体也不要',
     favorite: false,
   },
   {
-    id: 5,
+    id: 6,
     name: '禁不是而是',
     instruction: '不要使用“不是而是”的句式',
     favorite: false,
   },
   {
-    id: 6,
+    id: 7,
     name: '禁发白衬衫和军靴',
     instruction: '不要写衣服写得发白，换一个，也不要穿军靴',
+    favorite: false,
+  },
+  {
+    id: 8,
+    name: '禁不容置疑等',
+    instruction: '不要出现不容置疑，掌控欲，占有欲，野兽，低吼，猎物猎手等词',
+    favorite: false,
+  },
+  {
+    id: 9,
+    name: '别做完就睡',
+    instruction: '不要性爱之后马上睡觉，除了睡觉还有很多事情可以做',
+    favorite: false,
+  },
+  {
+    id: 10,
+    name: '禁绝望',
+    instruction: '不要动不动就崩溃绝望，角色的心理没有这么脆弱',
     favorite: false,
   },
 ];
@@ -169,10 +193,10 @@ export function normalizePenSettings(raw: unknown): PenSettings {
   const value = raw && typeof raw === 'object' ? (raw as Partial<PenSettings>) : {};
   const theme =
     value.theme === 'day' ||
-    value.theme === 'night' ||
-    value.theme === 'pastel' ||
-    value.theme === 'green' ||
-    value.theme === 'st'
+      value.theme === 'night' ||
+      value.theme === 'pastel' ||
+      value.theme === 'green' ||
+      value.theme === 'st'
       ? value.theme
       : 'day';
   return {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyFloorText, openFloorInPen } from '@/st/openFloor';
+import { applyFloorText, getFloorSourceText, openFloorInPen } from '@/st/openFloor';
 import { ui } from '@/state/ui';
 
 function installContext(context: Record<string, unknown>): void {
@@ -36,6 +36,24 @@ describe('floor access without rendered messages', () => {
     expect(ui.floor).toBe(0);
     expect(ui.originalText).toBe('未渲染的楼层正文');
     expect(ui.chatId).toBe('chat-a');
+  });
+
+  it('reads the active editor value before the persisted message text', () => {
+    const editor = { value: '编辑器中的正文' };
+    vi.stubGlobal('window', {
+      SillyTavern: {
+        getContext: () => ({
+          chat: [{ name: '角色', is_user: false, is_system: false, mes: '已保存正文' }],
+        }),
+      },
+    });
+    vi.stubGlobal('document', {
+      querySelector: vi.fn(() => ({
+        querySelector: vi.fn(() => editor),
+      })),
+    });
+
+    expect(getFloorSourceText(0)).toBe('编辑器中的正文');
   });
 
   it('updates the message, current swipe, events, and persisted chat', async () => {

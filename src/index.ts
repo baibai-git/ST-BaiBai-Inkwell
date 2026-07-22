@@ -1,6 +1,7 @@
 import App from '@/App.vue';
 import { initializePenSettings } from '@/api/settings';
 import { initializeSharedChannels } from '@/api/sharedChannels';
+import { checkForUpdate } from '@/api/update';
 import { bindEditButtons } from '@/editButton';
 import { injectMenuButton } from '@/menu';
 import { guardEditableArrowKeys } from '@/st/keyboard';
@@ -41,4 +42,6 @@ $(() => {
   injectMenuButton();
   bindEditButtons();
   void Promise.all([initializeSharedChannels(), initializePenSettings()]);
+  // 后台检测更新(实时比对本地/远端 manifest 版本;失败静默,不阻断启动)
+  void checkForUpdate();
 });

@@ -133,6 +133,7 @@
 }
 
 .bby-main-nav button {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -1259,7 +1260,7 @@
 .bby-settings-page-head {
   flex: 0 0 auto;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 14px var(--bby-page-pad);
@@ -1274,9 +1275,16 @@
   font-weight: 600;
 }
 
-/* 版本标签:实心强调底 + 强调上文字色(各主题随 --bby-accent 自适应) */
+.bby-ver-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 版本胶囊:实心强调底 + 强调上文字色(各主题随 --bby-accent 自适应),点击检查更新 */
 .bby-ver {
   padding: 7px 12px;
+  border: 0;
   border-radius: var(--bby-radius-pill);
   background: var(--bby-accent);
   color: var(--bby-accent-ink);
@@ -1284,6 +1292,29 @@
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
+  cursor: pointer;
+  transition: opacity var(--bby-duration) var(--bby-ease);
+}
+
+.bby-ver:hover {
+  opacity: 0.9;
+}
+
+.bby-ver:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 更新红点:有可用更新时亮在「设置」导航按钮右上角 */
+.bby-nav-dot {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bby-danger);
+  pointer-events: none;
 }
 
 .bby-settings-sections {
@@ -1643,6 +1674,38 @@
   flex: 0 0 auto;
   color: var(--bby-ink-muted);
   font-size: 14px;
+}
+
+/* 卡片右上角的快速操作:幽灵图标按钮,与搜索展开按钮同一视觉重量 */
+.bby-floor-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.bby-floor-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--bby-radius-sm);
+  background: transparent;
+  color: var(--bby-ink-muted);
+  cursor: pointer;
+  font-size: 15px;
+  transition:
+    color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease);
+}
+
+.bby-floor-action:hover {
+  color: var(--bby-accent);
+  background: var(--bby-surface-2);
 }
 
 .bby-floor-open.is-hidden .bby-floor-tag,
@@ -2275,6 +2338,7 @@
   }
 
   .bby-mobile-nav button {
+    position: relative;
     flex: 1;
     display: flex;
     align-items: center;
@@ -2290,6 +2354,12 @@
 
   .bby-mobile-nav button.is-active {
     color: var(--bby-accent);
+  }
+
+  /* 移动端图标居中,红点贴图标右上角而非按钮角落 */
+  .bby-mobile-nav .bby-nav-dot {
+    top: 7px;
+    right: calc(50% - 17px);
   }
 
   .bby-mobile-nav button:disabled {

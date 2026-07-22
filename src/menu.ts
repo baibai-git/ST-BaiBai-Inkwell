@@ -1,5 +1,6 @@
 import { openFloorPicker, openPen } from '@/state/ui';
 import { getContext } from '@/st/context';
+import { penIconSvg } from '@/penIcon';
 
 const MENU_ITEM_ID = 'bby-menu-item';
 
@@ -12,7 +13,7 @@ export function injectMenuButton(): void {
     const item = $(`
       <div class="extension_container interactable" tabindex="0">
         <a id="${MENU_ITEM_ID}" class="list-group-item" href="#" title="柏宝砚">
-          <i class="fa-solid fa-pen-ruler"></i>
+          ${penIconSvg(18, 2)}
           <span>柏宝砚</span>
         </a>
       </div>

@@ -1,5 +1,6 @@
 import { openPen } from '@/state/ui';
 import { getContext } from '@/st/context';
+import { penIconSvg } from '@/penIcon';
 
 const ACTION_CLASS = 'bby-message-rewrite-action';
 const STYLE_ID = 'bby-message-rewrite-action-style';
@@ -22,7 +23,8 @@ function ensureStyle(): void {
 
 function createAction(kind: 'top' | 'bottom'): HTMLDivElement {
   const button = document.createElement('div');
-  button.className = `menu_button fa-solid fa-pen-ruler ${ACTION_CLASS}`;
+  button.className = `menu_button ${ACTION_CLASS}`;
+  button.innerHTML = penIconSvg(15);
   button.dataset.bbyPlacement = kind;
   button.title = 'AI 标注改写';
   button.setAttribute('role', 'button');

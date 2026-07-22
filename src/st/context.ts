@@ -30,14 +30,23 @@ export interface STContext {
   saveChat?: () => Promise<void>;
   reloadCurrentChat?: () => Promise<void>;
   eventSource?: {
+    on?: (event: unknown, handler: (...args: unknown[]) => void) => void;
+    off?: (event: unknown, handler: (...args: unknown[]) => void) => void;
     emit: (event: unknown, ...args: unknown[]) => Promise<void>;
   };
   eventTypes?: {
+    CHAT_CHANGED?: unknown;
     MESSAGE_EDITED?: unknown;
     MESSAGE_UPDATED?: unknown;
   };
   getRequestHeaders: () => Record<string, string>;
   getCurrentChatId?: () => string | undefined;
+  executeSlashCommandsWithOptions?: (
+    command: string,
+    options?: { handleExecutionErrors?: boolean; source?: string },
+  ) => Promise<{ isError?: boolean; errorMessage?: string } | undefined>;
+  callGenericPopup?: (message: string, type: unknown) => Promise<unknown>;
+  POPUP_TYPE?: { CONFIRM?: unknown };
   substituteParams?: (content: string) => string;
   generateRaw?: (params: {
     prompt: Array<{ role: string; content: string }> | string;
@@ -79,6 +88,20 @@ export function getContext(): STContext | null {
 export function getOpenChatId(context: STContext | null = getContext()): string {
   const chatId = context?.getCurrentChatId?.();
   return typeof chatId === 'string' ? chatId.trim() : '';
+}
+
+export function getOpenChatIdentity(context: STContext | null = getContext()): string {
+  const chatId = getOpenChatId(context);
+  if (!chatId || !context) return '';
+  if (context.groupId) return `group:${context.groupId}\u0000${chatId}`;
+
+  const characterIndex = context.characterId;
+  const character =
+    characterIndex === undefined || characterIndex === null || characterIndex === ''
+      ? undefined
+      : context.characters?.[Number(characterIndex)];
+  const characterKey = character?.avatar || String(characterIndex ?? '');
+  return `character:${characterKey}\u0000${chatId}`;
 }
 
 export interface WorldInfoEntry {

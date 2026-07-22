@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { fetchModels, testChannel as testApiChannel } from '@/api/client';
 import { CHAIN_OF_THOUGHT_PROMPT, JAILBREAK_PROMPT } from '@/api/prompts';
-import { rewriteCurrentFloor, type RewriteChange } from '@/api/rewrite';
+import {
+  rewriteCurrentFloor,
+  type RewriteChange,
+  type RewriteResult,
+} from '@/api/rewrite';
 import { penSettings, type PenSettings, type QuickPhrase, type ReplaceRule } from '@/api/settings';
 import {
   bookUpdatePromptOpen,
@@ -15,13 +19,21 @@ import {
   sharingState,
   type ApiChannel,
 } from '@/api/sharedChannels';
+import { checkForUpdate, performUpdate, updateState } from '@/api/update';
 import Collapsible from '@/components/Collapsible.vue';
 import Icon from '@/components/Icon.vue';
 import ModalMask from '@/components/ModalMask.vue';
 import PhrasePicker from '@/components/PhrasePicker.vue';
 import { replaceText, replaceTextWithRules, type ReplacementResult } from '@/replacement';
+import {
+  classifyGenerationChat,
+  isGenerationTargetOpen,
+  type GenerationTarget,
+} from '@/state/generationTask';
+import { buildReviewRows, type ReviewRow } from '@/state/review';
 import { buildFloorPreview } from '@/st/floorPreview';
-import { applyFloorText, openFloorInPen } from '@/st/openFloor';
+import { deleteFloorsFrom, toggleFloorHidden } from '@/st/floorActions';
+import { applyFloorText, getFloorSourceText, openFloorInPen } from '@/st/openFloor';
 import {
   closePen,
   cycleTheme,
@@ -30,10 +42,35 @@ import {
   modalHost,
   THEMES,
   ui,
+  type AppPage,
 } from '@/state/ui';
-import { getContext, getOpenChatId } from '@/st/context';
-import { PLUGIN_VERSION } from '@/version';
-import { computed, nextTick, ref, watch } from 'vue';
+import { getContext, getOpenChatId, getOpenChatIdentity } from '@/st/context';
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
+
+interface WorkspaceDraftSnapshot {
+  selectedChannelId: string;
+  contextRounds: number;
+  carryWorldbook: boolean;
+  carryCharDesc: boolean;
+  carryUserDesc: boolean;
+  generalNote: string;
+  globalPhraseIds: number[];
+  markedPhrases: Record<number, number[]>;
+  paragraphNotes: Record<number, string>;
+}
+
+type GenerationOutcome =
+  | { kind: 'success'; result: RewriteResult }
+  | { kind: 'error'; message: string };
+
+interface GenerationTask extends GenerationTarget {
+  id: number;
+  chatId: string;
+  originalText: string;
+  draft: WorkspaceDraftSnapshot;
+  controller: AbortController;
+  outcome: GenerationOutcome | null;
+}
 
 const expandedId = ref<number | null>(null);
 const selectedChannelId = ref('');
@@ -55,17 +92,32 @@ const paragraphNotes = ref<Record<number, string>>({});
 const rewriteChanges = ref<RewriteChange[]>([]);
 const reviewDecision = ref<Record<number, 'accept' | 'reject'>>({});
 const generationError = ref('');
-const generating = ref(false);
 const saving = ref(false);
 const replacing = ref(false);
 const contextSummary = ref('');
-let requestController: AbortController | null = null;
+const generationTask = shallowRef<GenerationTask | null>(null);
+const currentChatIdentity = ref(getOpenChatIdentity());
+let generationSequence = 0;
+
+const generating = computed(() => generationTask.value?.outcome === null);
+const viewingGenerationTarget = computed(() =>
+  isGenerationTargetOpen(
+    generationTask.value,
+    currentChatIdentity.value,
+    ui.floor,
+  ),
+);
+const generationButtonLabel = computed(() => {
+  if (!generating.value) return ui.stage === 'annotate' ? '生成' : '重新生成';
+  if (viewingGenerationTarget.value) return '生成中…';
+  return `#${generationTask.value?.floor ?? ''} 生成中`;
+});
 
 const phrases = computed(() =>
   [...penSettings.phrases].sort((left, right) => Number(right.favorite) - Number(left.favorite)),
 );
 
-/* —— 工作台:段落标注是主体;整体要求与查找替换为顶部折叠区 —— */
+/* —— 工作台:行标注是主体;整体要求与查找替换为顶部折叠区 —— */
 const generalFilled = computed(() => !!generalNote.value.trim() || globalPhraseIds.value.length > 0);
 const enabledRuleCount = computed(() => penSettings.replaceRules.filter(rule => rule.enabled).length);
 
@@ -81,17 +133,30 @@ const nextTheme = computed(() => {
   return THEMES[(index + 1) % THEMES.length];
 });
 const reviewRows = computed(() =>
-  rewriteChanges.value.map(change => ({
-    id: change.paragraph,
-    original: ui.paragraphs[change.paragraph - 1]?.text ?? '',
-    result: change.replacement,
-    deleted: change.replacement === '',
-    marked: isMarked(change.paragraph),
+  buildReviewRows(
+    rewriteChanges.value,
+    ui.paragraphs.map(paragraph => paragraph.text),
+  ).map(row => ({
+    ...row,
+    marked: row.paragraphs.some(isMarked),
   })),
 );
 const acceptedCount = computed(
   () => rewriteChanges.value.filter(change => reviewDecision.value[change.paragraph] === 'accept').length,
 );
+
+function reviewRowDecision(row: ReviewRow): 'accept' | 'reject' | 'mixed' {
+  const decisions = row.paragraphs.map(paragraph => reviewDecision.value[paragraph]);
+  if (decisions.every(decision => decision === 'accept')) return 'accept';
+  if (decisions.every(decision => decision === 'reject')) return 'reject';
+  return 'mixed';
+}
+
+function setReviewRowDecision(row: ReviewRow, decision: 'accept' | 'reject'): void {
+  for (const paragraph of row.paragraphs) {
+    reviewDecision.value[paragraph] = decision;
+  }
+}
 
 watch(
   () => ui.sessionRevision,
@@ -152,6 +217,30 @@ watch(
   },
 );
 
+// 进入设置页时静默重查一次更新(force 绕开「会话只查一次」)
+watch(
+  () => ui.page,
+  page => {
+    if (page === 'settings') void checkForUpdate(true);
+  },
+);
+
+const updateConfirmOpen = ref(false);
+
+function openUpdateConfirm(): void {
+  updateConfirmOpen.value = true;
+}
+
+async function confirmUpdate(): Promise<void> {
+  updateConfirmOpen.value = false;
+  try {
+    await performUpdate();
+    toastr?.success?.('更新成功，正在刷新页面…', '柏宝砚');
+  } catch (error) {
+    toastr?.error?.(`更新失败：${error instanceof Error ? error.message : String(error)}`, '柏宝砚');
+  }
+}
+
 function isMarked(id: number): boolean {
   return (markedPhrases.value[id] ?? []).length > 0 || !!paragraphNotes.value[id]?.trim();
 }
@@ -163,7 +252,7 @@ function markedNames(id: number): string[] {
 }
 
 function toggleExpand(id: number): void {
-  if (ui.stage !== 'annotate' || generating.value) return;
+  if (ui.stage !== 'annotate' || viewingGenerationTarget.value) return;
   saveNote();
   if (expandedId.value === id) {
     expandedId.value = null;
@@ -176,6 +265,51 @@ function toggleExpand(id: number): void {
 function saveNote(): void {
   if (expandedId.value == null) return;
   paragraphNotes.value[expandedId.value] = customNote.value;
+}
+
+function captureWorkspaceDraft(): WorkspaceDraftSnapshot {
+  return {
+    selectedChannelId: selectedChannelId.value,
+    contextRounds: contextRounds.value,
+    carryWorldbook: carryWorldbook.value,
+    carryCharDesc: carryCharDesc.value,
+    carryUserDesc: carryUserDesc.value,
+    generalNote: generalNote.value,
+    globalPhraseIds: [...globalPhraseIds.value],
+    markedPhrases: Object.fromEntries(
+      Object.entries(markedPhrases.value).map(([id, phraseIds]) => [id, [...phraseIds]]),
+    ),
+    paragraphNotes: { ...paragraphNotes.value },
+  };
+}
+
+function restoreWorkspaceDraft(draft: WorkspaceDraftSnapshot): void {
+  selectedChannelId.value =
+    draft.selectedChannelId &&
+    channels.some(channel => channel.id === draft.selectedChannelId)
+      ? draft.selectedChannelId
+      : '';
+  contextRounds.value = draft.contextRounds;
+  carryWorldbook.value = draft.carryWorldbook;
+  carryCharDesc.value = draft.carryCharDesc;
+  carryUserDesc.value = draft.carryUserDesc;
+  generalNote.value = draft.generalNote;
+  globalPhraseIds.value = [...draft.globalPhraseIds];
+  markedPhrases.value = Object.fromEntries(
+    Object.entries(draft.markedPhrases).map(([id, phraseIds]) => [id, [...phraseIds]]),
+  );
+  paragraphNotes.value = { ...draft.paragraphNotes };
+  expandedId.value = null;
+  customNote.value = '';
+}
+
+function formatContextSummary(result: RewriteResult): string {
+  return [
+    `历史消息 ${result.historyMessageCount} 条`,
+    result.contextParts.charCard ? '角色设定' : '',
+    result.contextParts.persona ? '用户设定' : '',
+    result.contextParts.worldInfo ? '世界书' : '',
+  ].filter(Boolean).join(' · ');
 }
 
 function clearMark(id: number): void {
@@ -389,15 +523,155 @@ function enterFloor(floor: number): void {
   if (!ok) showToast('无法打开该楼层');
 }
 
+async function onToggleFloorHidden(floor: number): Promise<void> {
+  try {
+    const nowHidden = await toggleFloorHidden(floor);
+    refreshFloorRows();
+    showToast(nowHidden ? `已隐藏第 ${floor} 层` : `已显示第 ${floor} 层`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '操作失败');
+  }
+}
+
+async function onDeleteFloor(floor: number): Promise<void> {
+  try {
+    const deleted = await deleteFloorsFrom(floor);
+    if (!deleted) return;
+    // 被删范围包含当前正在改写的楼层时,工作区内容已失效,一并清掉
+    if (ui.floor != null && ui.floor >= floor) {
+      ui.floor = null;
+      ui.floorLabel = '';
+      ui.speaker = '';
+      ui.originalText = '';
+      ui.chatId = '';
+      ui.paragraphs = [];
+    }
+    refreshFloorRows();
+    showToast(`已删除第 ${floor} 层及之后 ${deleted} 层`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '删除失败');
+  }
+}
+
 function goToWorkspace(): void {
   ui.page = ui.floor == null ? 'floors' : 'workspace';
 }
 
+// 移动端:再点一下当前页的导航按钮即关闭整窗(对齐柏宝书,省得去够右上角的 ×);非当前页正常切页。
+function onMobileNavClick(page: AppPage): void {
+  if (ui.page === page) {
+    closePen();
+    return;
+  }
+  if (page === 'workspace') goToWorkspace();
+  else ui.page = page;
+}
+
+function isCurrentGenerationTask(taskId: number): boolean {
+  return generationTask.value?.id === taskId;
+}
+
+function discardGenerationTask(taskId: number, notify = false): void {
+  const task = generationTask.value;
+  if (!task || task.id !== taskId) return;
+  task.controller.abort();
+  generationTask.value = null;
+  if (notify) showToast('聊天已切换，本次生成结果已丢弃');
+}
+
+async function reconcileGenerationTask(expectedTaskId?: number): Promise<void> {
+  const task = generationTask.value;
+  if (!task || (expectedTaskId !== undefined && task.id !== expectedTaskId)) return;
+
+  currentChatIdentity.value = getOpenChatIdentity();
+  const location = classifyGenerationChat(task.chatIdentity, currentChatIdentity.value);
+  if (location === 'home') return;
+  if (location === 'other') {
+    discardGenerationTask(task.id, true);
+    return;
+  }
+  if (!task.outcome) return;
+
+  const currentText = getFloorSourceText(task.floor);
+  if (currentText == null) {
+    generationTask.value = null;
+    toastr?.warning?.(`生成目标楼层 #${task.floor} 已不存在，结果已丢弃`, '柏宝砚');
+    return;
+  }
+  if (currentText !== task.originalText) {
+    generationTask.value = null;
+    toastr?.warning?.(`楼层 #${task.floor} 在生成期间已发生变化，结果已丢弃`, '柏宝砚');
+    return;
+  }
+  if (!openFloorInPen(task.floor)) {
+    generationTask.value = null;
+    toastr?.warning?.(`无法重新打开生成目标楼层 #${task.floor}`, '柏宝砚');
+    return;
+  }
+
+  await nextTick();
+  if (!isCurrentGenerationTask(task.id)) return;
+  currentChatIdentity.value = getOpenChatIdentity();
+  const locationAfterOpen = classifyGenerationChat(task.chatIdentity, currentChatIdentity.value);
+  if (locationAfterOpen === 'home') return;
+  if (locationAfterOpen === 'other') {
+    discardGenerationTask(task.id, true);
+    return;
+  }
+  restoreWorkspaceDraft(task.draft);
+  generationError.value = '';
+  contextSummary.value = '';
+
+  if (task.outcome.kind === 'success') {
+    rewriteChanges.value = task.outcome.result.changes;
+    reviewDecision.value = Object.fromEntries(
+      task.outcome.result.changes.map(change => [change.paragraph, 'accept' as const]),
+    );
+    contextSummary.value = formatContextSummary(task.outcome.result);
+    ui.stage = 'review';
+  } else {
+    rewriteChanges.value = [];
+    reviewDecision.value = {};
+    generationError.value = task.outcome.message;
+    ui.stage = 'annotate';
+    showToast('生成失败');
+  }
+
+  generationTask.value = null;
+}
+
+let chatChangedHandler: (() => void) | null = null;
+let chatChangedEvent: unknown;
+
+onMounted(() => {
+  const context = getContext();
+  currentChatIdentity.value = getOpenChatIdentity(context);
+  const event = context?.eventTypes?.CHAT_CHANGED;
+  const on = context?.eventSource?.on;
+  if (!event || typeof on !== 'function') return;
+  chatChangedEvent = event;
+  chatChangedHandler = () => {
+    window.setTimeout(() => {
+      currentChatIdentity.value = getOpenChatIdentity();
+      void reconcileGenerationTask();
+    }, 0);
+  };
+  on.call(context.eventSource, event, chatChangedHandler);
+});
+
+onUnmounted(() => {
+  const context = getContext();
+  if (chatChangedHandler && chatChangedEvent && typeof context?.eventSource?.off === 'function') {
+    context.eventSource.off(chatChangedEvent, chatChangedHandler);
+  }
+  generationTask.value?.controller.abort();
+});
+
 async function startReview(): Promise<void> {
-  if (generating.value || saving.value || replacing.value) return;
+  if (generationTask.value || saving.value || replacing.value) return;
   saveNote();
   if (!hasInstructions.value) {
-    showToast('请先添加段落标注或整体要求');
+    showToast('请先添加行标注或整体要求');
     return;
   }
   if (ui.floor == null || !ui.originalText.trim()) {
@@ -406,68 +680,97 @@ async function startReview(): Promise<void> {
   }
   contextRounds.value = Math.min(10, Math.max(0, Math.floor(Number(contextRounds.value) || 0)));
 
+  const context = getContext();
+  const chatId = getOpenChatId(context);
+  const chatIdentity = getOpenChatIdentity(context);
+  if (!chatId || !chatIdentity) {
+    showToast('当前聊天不可用');
+    return;
+  }
+
+  const floor = ui.floor;
+  const originalText = ui.originalText;
+  const draft = captureWorkspaceDraft();
+  const selectedChannel = selectedChannelId.value
+    ? channels.find(channel => channel.id === selectedChannelId.value) ?? null
+    : null;
+  const controller = new AbortController();
+  const task: GenerationTask = {
+    id: ++generationSequence,
+    chatId,
+    chatIdentity,
+    floor,
+    originalText,
+    draft,
+    controller,
+    outcome: null,
+  };
+  currentChatIdentity.value = chatIdentity;
+  const annotations = ui.paragraphs
+    .filter(paragraph => isMarked(paragraph.id))
+    .map(paragraph => ({
+      paragraph: paragraph.id,
+      text: paragraph.text,
+      instructions: [
+        ...(markedPhrases.value[paragraph.id] ?? []).map(phraseInstruction),
+        paragraphNotes.value[paragraph.id] ?? '',
+      ].filter(Boolean),
+    }));
+  const generalInstructions = [
+    ...globalPhraseIds.value.map(phraseInstruction),
+    generalNote.value,
+  ].filter(Boolean);
+
   generationError.value = '';
   contextSummary.value = '';
-  generating.value = true;
-  requestController = new AbortController();
+  generationTask.value = task;
   try {
     const result = await rewriteCurrentFloor({
-      floor: ui.floor,
-      originalText: ui.originalText,
-      contextRounds: contextRounds.value,
-      includeWorldInfo: carryWorldbook.value,
-      includeCharacterDescription: carryCharDesc.value,
-      includeUserDescription: carryUserDesc.value,
-      channel: selectedChannelId.value
-        ? channels.find(channel => channel.id === selectedChannelId.value) ?? null
-        : null,
-      signal: requestController.signal,
-      generalInstructions: [
-        ...globalPhraseIds.value.map(phraseInstruction),
-        generalNote.value,
-      ].filter(Boolean),
-      annotations: ui.paragraphs
-        .filter(paragraph => isMarked(paragraph.id))
-        .map(paragraph => ({
-          paragraph: paragraph.id,
-          text: paragraph.text,
-          instructions: [
-            ...(markedPhrases.value[paragraph.id] ?? []).map(phraseInstruction),
-            paragraphNotes.value[paragraph.id] ?? '',
-          ].filter(Boolean),
-        })),
+      floor,
+      originalText,
+      contextRounds: draft.contextRounds,
+      includeWorldInfo: draft.carryWorldbook,
+      includeCharacterDescription: draft.carryCharDesc,
+      includeUserDescription: draft.carryUserDesc,
+      channel: selectedChannel ? JSON.parse(JSON.stringify(selectedChannel)) as ApiChannel : null,
+      signal: controller.signal,
+      generalInstructions,
+      annotations,
     });
-    rewriteChanges.value = result.changes;
-    reviewDecision.value = Object.fromEntries(
-      result.changes.map(change => [change.paragraph, 'accept' as const]),
-    );
-    contextSummary.value = [
-      `历史消息 ${result.historyMessageCount} 条`,
-      result.contextParts.charCard ? '角色设定' : '',
-      result.contextParts.persona ? '用户设定' : '',
-      result.contextParts.worldInfo ? '世界书' : '',
-    ].filter(Boolean).join(' · ');
-    expandedId.value = null;
-    ui.stage = 'review';
+    if (!isCurrentGenerationTask(task.id)) return;
+    generationTask.value = {
+      ...task,
+      outcome: { kind: 'success', result },
+    };
+    await reconcileGenerationTask(task.id);
   } catch (error) {
+    if (!isCurrentGenerationTask(task.id)) return;
     if (error instanceof DOMException && error.name === 'AbortError') {
-      showToast('已取消生成');
+      generationTask.value = null;
+      return;
     } else {
-      generationError.value = error instanceof Error ? error.message : String(error);
-      showToast('生成失败');
+      generationTask.value = {
+        ...task,
+        outcome: {
+          kind: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+      await reconcileGenerationTask(task.id);
     }
-  } finally {
-    generating.value = false;
-    requestController = null;
   }
 }
 
 function cancelGeneration(): void {
-  requestController?.abort();
+  const task = generationTask.value;
+  if (!task || task.outcome) return;
+  task.controller.abort();
+  generationTask.value = null;
+  showToast('已取消生成');
 }
 
 function backToAnnotate(): void {
-  if (generating.value) return;
+  if (viewingGenerationTarget.value) return;
   ui.stage = 'annotate';
 }
 
@@ -623,7 +926,7 @@ const quickReplacement = ref('');
 const quickIsRegex = ref(false);
 
 async function applyReplacement(result: ReplacementResult): Promise<void> {
-  if (replacing.value || generating.value || saving.value) return;
+  if (replacing.value || viewingGenerationTarget.value || saving.value) return;
   if (ui.floor == null) {
     showToast('当前楼层不可用');
     return;
@@ -740,7 +1043,7 @@ const PROMPT_METAS: PromptMeta[] = [
   {
     key: 'chainOfThought',
     label: '思维链提示词',
-    hint: '在最终改写任务之后追加，引导模型先审稿判断再返回段落补丁。留空则用内置默认。',
+    hint: '在最终改写任务之后追加，引导模型先审稿判断再返回逐行补丁。留空则用内置默认。',
     builtin: CHAIN_OF_THOUGHT_PROMPT,
   },
 ];
@@ -785,7 +1088,7 @@ function onOverlayPointerDown(event: PointerEvent): void {
 
 function onOverlayClick(event: MouseEvent): void {
   const justOpened = performance.now() - lastOpenedAt < 350;
-  if (!justOpened && pressedOnOverlay && event.target === event.currentTarget && !generating.value) {
+  if (!justOpened && pressedOnOverlay && event.target === event.currentTarget) {
     closePen();
   }
   pressedOnOverlay = false;
@@ -802,7 +1105,7 @@ function onOverlayClick(event: MouseEvent): void {
         tabindex="-1"
         @pointerdown="onOverlayPointerDown"
         @click="onOverlayClick"
-        @keydown.esc="!generating && closePen()"
+        @keydown.esc="closePen"
       >
         <section class="bby-window" role="dialog" aria-modal="true" aria-label="柏宝砚">
           <div class="bby-mobile-grabber"><span></span></div>
@@ -813,7 +1116,7 @@ function onOverlayClick(event: MouseEvent): void {
               <button class="bby-icon-button" type="button" :title="`切换主题：${nextTheme.label}`" @click="cycleTheme">
                 <Icon :name="nextTheme.icon" />
               </button>
-              <button class="bby-icon-button" type="button" title="关闭" :disabled="generating" @click="closePen">
+              <button class="bby-icon-button" type="button" title="关闭" @click="closePen">
                 <Icon name="close" />
               </button>
             </div>
@@ -828,6 +1131,7 @@ function onOverlayClick(event: MouseEvent): void {
             </button>
             <button type="button" :class="{ 'is-active': ui.page === 'settings' }" @click="ui.page = 'settings'">
               <Icon name="settings" /> 设置
+              <span v-if="updateState.available" class="bby-nav-dot" aria-label="有可用更新"></span>
             </button>
           </nav>
 
@@ -836,7 +1140,7 @@ function onOverlayClick(event: MouseEvent): void {
             <div v-if="ui.page === 'workspace'" key="workspace" class="bby-page-shell">
               <div v-if="ui.stage === 'annotate'" class="bby-work-tabs bby-status-strip">
                 <span class="bby-floor-number">{{ ui.floorLabel }}</span>
-                <span>已标注 <b>{{ markedCount }}</b> 段</span>
+                <span>已标注 <b>{{ markedCount }}</b> 行</span>
               </div>
 
               <div v-else class="bby-work-tabs bby-review-bar">
@@ -845,7 +1149,7 @@ function onOverlayClick(event: MouseEvent): void {
                   <strong>{{ ui.speaker }}</strong>
                 </div>
                 <div class="bby-doc-status">
-                  <span>AI 建议 <b>{{ reviewRows.length }}</b> 段 · 已选 <b>{{ acceptedCount }}</b> 段</span>
+                  <span>AI 建议 <b>{{ reviewRows.length }}</b> 项 · 已选 <b>{{ acceptedCount }}</b> 行</span>
                   <button class="bby-text-action" type="button" @click="backToAnnotate">
                     <Icon name="undo" /> 返回标注
                   </button>
@@ -858,7 +1162,7 @@ function onOverlayClick(event: MouseEvent): void {
                     <i v-if="generalFilled" class="bby-tab-dot"></i>
                   </template>
                   <section class="bby-general-editor">
-                    <p class="bby-field-hint">作用于当前楼层全文的要求，与段落标注一起发给 AI。</p>
+                    <p class="bby-field-hint">作用于当前楼层全文的要求，与行标注一起发给 AI。</p>
                     <PhrasePicker v-if="phrases.length" v-model="globalPhraseIds" :phrases="phrases" />
                     <textarea
                       v-model="generalNote"
@@ -922,7 +1226,7 @@ function onOverlayClick(event: MouseEvent): void {
                         <button
                           class="bby-button bby-primary bby-btn-sm"
                           type="button"
-                          :disabled="replacing || generating || saving || !quickFind"
+                          :disabled="replacing || viewingGenerationTarget || saving || !quickFind"
                           @click="runQuickReplace"
                         >
                           <Icon name="replace" /> {{ replacing ? '替换中…' : '替换' }}
@@ -973,7 +1277,7 @@ function onOverlayClick(event: MouseEvent): void {
                         <button
                           class="bby-button bby-btn-sm"
                           type="button"
-                          :disabled="replacing || generating || saving || !enabledRuleCount"
+                          :disabled="replacing || viewingGenerationTarget || saving || !enabledRuleCount"
                           @click="runReplace"
                         >
                           <Icon name="replace" /> {{ replacing ? '执行中…' : '执行规则' }}
@@ -996,7 +1300,7 @@ function onOverlayClick(event: MouseEvent): void {
                   <button
                     class="bby-para-text"
                     type="button"
-                    :disabled="generating"
+                    :disabled="viewingGenerationTarget"
                     @click="toggleExpand(paragraph.id)"
                   >
                     {{ paragraph.text }}
@@ -1011,7 +1315,7 @@ function onOverlayClick(event: MouseEvent): void {
                     <div v-if="expandedId === paragraph.id" class="bby-para-editor">
                       <div class="bby-para-editor-head">
                         <span>改写要求</span>
-                        <button class="bby-icon-mini bby-danger-hover" type="button" title="清除本段标注" @click="clearMark(paragraph.id)">
+                        <button class="bby-icon-mini bby-danger-hover" type="button" title="清除本行标注" @click="clearMark(paragraph.id)">
                           <Icon name="trash" />
                         </button>
                       </div>
@@ -1024,7 +1328,7 @@ function onOverlayClick(event: MouseEvent): void {
                       <textarea
                         v-model="customNote"
                         class="bby-input bby-note"
-                        placeholder="填写希望如何修改这一段"
+                        placeholder="填写希望如何修改这一行"
                         @blur="saveNote"
                       ></textarea>
                       <button class="bby-text-action" type="button" @click="ui.page = 'settings'">
@@ -1043,13 +1347,15 @@ function onOverlayClick(event: MouseEvent): void {
                 <p v-if="generationError" class="bby-error-message">{{ generationError }}</p>
                 <div
                   v-for="row in reviewRows"
-                  :key="row.id"
+                  :key="row.key"
                   class="bby-review-row"
-                  :class="{ 'is-rejected': reviewDecision[row.id] === 'reject' }"
+                  :class="{ 'is-rejected': reviewRowDecision(row) === 'reject' }"
                 >
                   <div class="bby-review-row-head">
-                    <span class="bby-floor-number">#P{{ row.id }}</span>
-                    <span class="bby-tag">{{ row.deleted ? '删除段落' : row.marked ? '标注段落' : '关联调整' }}</span>
+                    <span class="bby-floor-number">{{ row.label }}</span>
+                    <span class="bby-tag">
+                      {{ row.deleted ? row.paragraphs.length > 1 ? `删除 ${row.paragraphs.length} 行` : '删除行' : row.marked ? '标注行' : '关联调整' }}
+                    </span>
                   </div>
                   <div class="bby-review-columns">
                     <div>
@@ -1058,23 +1364,25 @@ function onOverlayClick(event: MouseEvent): void {
                     </div>
                     <div>
                       <span class="bby-review-label">改写结果</span>
-                      <p :class="{ 'bby-deleted-text': row.deleted }">{{ row.deleted ? '（删除整段）' : row.result }}</p>
+                      <p :class="{ 'bby-deleted-text': row.deleted }">
+                        {{ row.deleted ? row.paragraphs.length > 1 ? `（删除连续 ${row.paragraphs.length} 行）` : '（删除整行）' : row.result }}
+                      </p>
                     </div>
                   </div>
                   <div class="bby-decide">
                     <button
                       type="button"
-                      :class="{ 'is-active': reviewDecision[row.id] === 'reject' }"
-                      @click="reviewDecision[row.id] = 'reject'"
+                      :class="{ 'is-active': reviewRowDecision(row) === 'reject' }"
+                      @click="setReviewRowDecision(row, 'reject')"
                     >
-                      丢弃本段
+                      {{ row.paragraphs.length > 1 ? '丢弃本组' : '丢弃本行' }}
                     </button>
                     <button
                       type="button"
-                      :class="{ 'is-active': reviewDecision[row.id] === 'accept' }"
-                      @click="reviewDecision[row.id] = 'accept'"
+                      :class="{ 'is-active': reviewRowDecision(row) === 'accept' }"
+                      @click="setReviewRowDecision(row, 'accept')"
                     >
-                      应用本段
+                      {{ row.paragraphs.length > 1 ? '应用本组' : '应用本行' }}
                     </button>
                   </div>
                 </div>
@@ -1113,7 +1421,7 @@ function onOverlayClick(event: MouseEvent): void {
                 </div>
                 <div class="bby-action-buttons">
                   <button v-if="generating" class="bby-button" type="button" @click="cancelGeneration">
-                    取消
+                    {{ viewingGenerationTarget ? '取消' : `取消 #${generationTask?.floor}` }}
                   </button>
                   <button
                     v-if="ui.stage === 'annotate'"
@@ -1122,16 +1430,16 @@ function onOverlayClick(event: MouseEvent): void {
                     :disabled="generating || replacing || !hasInstructions"
                     @click="startReview"
                   >
-                    <Icon :name="generating ? 'refresh' : 'bolt'" :class="{ 'bby-spin': generating }" />
-                    {{ generating ? '生成中…' : '生成' }}
+                    <Icon :name="viewingGenerationTarget ? 'refresh' : 'bolt'" :class="{ 'bby-spin': viewingGenerationTarget }" />
+                    {{ generationButtonLabel }}
                   </button>
                   <template v-else>
                     <button class="bby-button" type="button" :disabled="generating || replacing" @click="startReview">
-                      <Icon name="refresh" :class="{ 'bby-spin': generating }" /> 重新生成
+                      <Icon name="refresh" :class="{ 'bby-spin': viewingGenerationTarget }" /> {{ generationButtonLabel }}
                     </button>
                     <button class="bby-button bby-primary" type="button" :disabled="generating || saving || replacing" @click="finishReview">
                       <Icon :name="acceptedCount === 0 ? 'trash' : 'check'" />
-                      {{ saving ? '保存中…' : acceptedCount === 0 ? '丢弃全部' : `应用 ${acceptedCount} 段` }}
+                      {{ saving ? '保存中…' : acceptedCount === 0 ? '丢弃全部' : `应用 ${acceptedCount} 行` }}
                     </button>
                   </template>
                 </div>
@@ -1176,23 +1484,43 @@ function onOverlayClick(event: MouseEvent): void {
                 <div class="bby-floor-list">
                   <p v-if="!floorChatOpen" class="bby-field-hint">请先进入一个聊天，之后即可选择需要改写的楼层。</p>
                   <template v-else>
-                    <button
+                    <div
                       v-for="row in pagedFloorRows"
                       :key="row.floor"
                       class="bby-floor-open"
                       :class="{ 'is-user': row.isUser, 'is-hidden': row.hidden }"
-                      type="button"
+                      role="button"
+                      tabindex="0"
                       @click="enterFloor(row.floor)"
+                      @keydown.enter.prevent="enterFloor(row.floor)"
                     >
                       <span class="bby-floor-main">
                         <span class="bby-floor-tags">
                           <span class="bby-floor-tag bby-floor-tag-num">#{{ row.floor }}</span>
                           <span class="bby-floor-tag bby-floor-role">{{ row.isUser ? 'User' : 'Char' }}</span>
                           <Icon v-if="row.hidden" name="ghost" class="bby-floor-ghost" title="已隐藏楼层（不参与上下文）" />
+                          <span class="bby-floor-actions">
+                            <button
+                              class="bby-floor-action"
+                              type="button"
+                              :title="row.hidden ? '显示楼层' : '隐藏楼层'"
+                              @click.stop="onToggleFloorHidden(row.floor)"
+                            >
+                              <Icon :name="row.hidden ? 'eyeOff' : 'eye'" />
+                            </button>
+                            <button
+                              class="bby-floor-action"
+                              type="button"
+                              title="删除该层及之后楼层"
+                              @click.stop="onDeleteFloor(row.floor)"
+                            >
+                              <Icon name="trash" />
+                            </button>
+                          </span>
                         </span>
                         <small>{{ row.preview }}</small>
                       </span>
-                    </button>
+                    </div>
                     <p v-if="!floorRows.length" class="bby-field-hint">当前聊天没有可改写的楼层。</p>
                     <p v-else-if="!visibleFloorRows.length" class="bby-field-hint">当前聊天没有 AI 楼层。</p>
                     <p v-else-if="!filteredFloorRows.length" class="bby-field-hint">没有匹配的楼层。</p>
@@ -1215,7 +1543,17 @@ function onOverlayClick(event: MouseEvent): void {
             <main v-else key="settings" class="bby-settings bby-page-shell">
               <header class="bby-settings-page-head">
                 <h2>设置</h2>
-                <span class="bby-ver">v{{ PLUGIN_VERSION }}</span>
+                <div class="bby-ver-group">
+                  <button class="bby-ver" type="button" :disabled="updateState.checking"
+                    :title="updateState.checking ? '正在检查更新' : '点击检查更新'"
+                    @click="checkForUpdate(true)">
+                    v{{ updateState.current || '—' }}
+                  </button>
+                  <button v-if="updateState.available" class="bby-button bby-primary bby-btn-sm" type="button"
+                    :disabled="updateState.updating" :title="`更新到 v${updateState.latest}`" @click="openUpdateConfirm">
+                    {{ updateState.updating ? '更新中…' : '更新' }}
+                  </button>
+                </div>
               </header>
 
               <div class="bby-settings-sections">
@@ -1318,14 +1656,15 @@ function onOverlayClick(event: MouseEvent): void {
           </div>
 
           <nav class="bby-mobile-nav" aria-label="移动端导航">
-            <button :class="{ 'is-active': ui.page === 'floors' }" type="button" title="楼层" aria-label="楼层" @click="ui.page = 'floors'">
+            <button :class="{ 'is-active': ui.page === 'floors' }" type="button" title="楼层" aria-label="楼层" @click="onMobileNavClick('floors')">
               <Icon name="list" />
             </button>
-            <button :class="{ 'is-active': ui.page === 'workspace' }" type="button" :disabled="ui.floor == null" title="工作台" aria-label="工作台" @click="goToWorkspace">
+            <button :class="{ 'is-active': ui.page === 'workspace' }" type="button" :disabled="ui.floor == null" title="工作台" aria-label="工作台" @click="onMobileNavClick('workspace')">
               <Icon name="workspace" />
             </button>
-            <button :class="{ 'is-active': ui.page === 'settings' }" type="button" title="设置" aria-label="设置" @click="ui.page = 'settings'">
+            <button :class="{ 'is-active': ui.page === 'settings' }" type="button" title="设置" aria-label="设置" @click="onMobileNavClick('settings')">
               <Icon name="settings" />
+              <span v-if="updateState.available" class="bby-nav-dot" aria-label="有可用更新"></span>
             </button>
           </nav>
         </section>
@@ -1417,6 +1756,26 @@ function onOverlayClick(event: MouseEvent): void {
           <button class="bby-button" type="button" :disabled="sharingState.updating" @click="bookUpdatePromptOpen = false">暂不更新</button>
           <button class="bby-button bby-primary" type="button" :disabled="sharingState.updating" @click="performBookUpdate">
             <Icon name="refresh" /> {{ sharingState.updating ? '更新中…' : '更新并刷新' }}
+          </button>
+        </footer>
+      </div>
+    </ModalMask>
+
+    <ModalMask :open="updateConfirmOpen" @close="updateConfirmOpen = false">
+      <div class="bby-modal" role="dialog" aria-modal="true" aria-label="发现新版本">
+        <header class="bby-modal-head">
+          <span class="bby-modal-title">发现新版本</span>
+          <button class="bby-icon-mini" type="button" title="关闭" @click="updateConfirmOpen = false"><Icon name="close" /></button>
+        </header>
+        <p class="bby-field-hint">
+          当前版本 v{{ updateState.current || '—' }}，最新版本 v{{ updateState.latest }}。
+          现在更新吗？更新完成后会自动刷新页面生效。
+        </p>
+        <footer class="bby-modal-foot">
+          <span class="bby-modal-foot-spacer"></span>
+          <button class="bby-button" type="button" :disabled="updateState.updating" @click="updateConfirmOpen = false">暂不更新</button>
+          <button class="bby-button bby-primary" type="button" :disabled="updateState.updating" @click="confirmUpdate">
+            <Icon name="refresh" /> {{ updateState.updating ? '更新中…' : '更新并刷新' }}
           </button>
         </footer>
       </div>

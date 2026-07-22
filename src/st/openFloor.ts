@@ -9,6 +9,12 @@ function activeEditorText(floor: number): string | null {
   return findMessage(floor)?.querySelector<HTMLTextAreaElement>('#curEditTextarea')?.value ?? null;
 }
 
+export function getFloorSourceText(floor: number): string | null {
+  const message = getContext()?.chat?.[floor];
+  if (!message) return null;
+  return activeEditorText(floor) ?? message.mes ?? '';
+}
+
 /** 从楼层列表直接读取聊天数据，不要求该楼层已经渲染到 DOM。 */
 export function openFloorInPen(floor: number): boolean {
   const context = getContext();

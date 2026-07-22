@@ -27,6 +27,15 @@ export interface STContext {
   maxContext?: number;
   extensionSettings?: Record<string, unknown>;
   saveSettingsDebounced?: () => void;
+  saveChat?: () => Promise<void>;
+  reloadCurrentChat?: () => Promise<void>;
+  eventSource?: {
+    emit: (event: unknown, ...args: unknown[]) => Promise<void>;
+  };
+  eventTypes?: {
+    MESSAGE_EDITED?: unknown;
+    MESSAGE_UPDATED?: unknown;
+  };
   getRequestHeaders: () => Record<string, string>;
   getCurrentChatId?: () => string | undefined;
   substituteParams?: (content: string) => string;
@@ -65,6 +74,11 @@ export function getContext(): STContext | null {
   } catch {
     return null;
   }
+}
+
+export function getOpenChatId(context: STContext | null = getContext()): string {
+  const chatId = context?.getCurrentChatId?.();
+  return typeof chatId === 'string' ? chatId.trim() : '';
 }
 
 export interface WorldInfoEntry {

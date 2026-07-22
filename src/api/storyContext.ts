@@ -1,4 +1,3 @@
-import type { ChatMessage } from '@/api/client';
 import {
   getCheckWorldInfo,
   getContext,
@@ -8,20 +7,37 @@ import {
 } from '@/st/context';
 
 const HUGE_WORLD_INFO_CONTEXT = 1_000_000_000;
-const THINK_BLOCK = /<think(?:ing)?\b[\s\S]*?<\/think(?:ing)?>/gi;
+const THINK_BLOCK =
+  /<(?:think|thinking|thinging)\b[^>]*>[\s\S]*?<\/(?:think|thinking|thinging)\s*>/gi;
+const UNCLOSED_THINK_BLOCK = /<(?:think|thinking|thinging)\b[^>]*>[\s\S]*$/gi;
+const NON_STORY_SYSTEM_TYPES = new Set([
+  'help',
+  'slash_commands',
+  'formatting',
+  'hotkeys',
+  'macros',
+  'welcome',
+  'empty',
+  'generic',
+  'comment',
+  'welcome_prompt',
+  'assistant_note',
+]);
 const BOOK_SETTINGS_KEY = 'baibai_book';
 
 export interface RewriteStoryContext {
-  history: ChatMessage[];
+  historyReference: string;
+  latestUserMessage: string;
   worldInfo: string;
   charCard: string;
   persona: string;
   historyMessageCount: number;
 }
 
-function cleanForWorldInfo(message: string): string {
+export function cleanStoryContextText(message: string): string {
   let text = String(message ?? '')
     .replace(THINK_BLOCK, '')
+    .replace(UNCLOSED_THINK_BLOCK, '')
     .replace(/<!--[\s\S]+?-->/g, '')
     .replace(/<horae[\s\S]*?>[\s\S]*?<\/horae[\s\S]*?>/gi, '');
   const starts = [...text.matchAll(/<bbs_start\b/gi)];
@@ -32,14 +48,35 @@ function cleanForWorldInfo(message: string): string {
   return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function selectHistoryIndices(chat: STMessage[], floor: number, rounds: number): number[] {
+function isSystemUiMessage(message: STMessage): boolean {
+  if (message.extra?.uses_system_ui === true) return true;
+  const type = message.extra?.type;
+  return typeof type === 'string' && NON_STORY_SYSTEM_TYPES.has(type.toLowerCase());
+}
+
+function isStoryUserMessage(message: STMessage | undefined): message is STMessage {
+  return !!message && message.is_user && !isSystemUiMessage(message);
+}
+
+function isStoryAssistantMessage(message: STMessage | undefined): message is STMessage {
+  if (!message || message.is_user || isSystemUiMessage(message)) return false;
+  if (!message.is_system) return true;
+  const name = message.name.trim().toLowerCase();
+  return name !== 'system' && name !== 'sillytavern system';
+}
+
+export function selectHistoryIndices(
+  chat: STMessage[],
+  floor: number,
+  rounds: number,
+): number[] {
   const selected: number[] = [];
   let cursor = floor;
   for (let round = 0; round < rounds; round += 1) {
     let userIndex = -1;
     for (let index = cursor - 1; index >= 0; index -= 1) {
       const message = chat[index];
-      if (message && message.is_user && !message.is_system) {
+      if (isStoryUserMessage(message)) {
         userIndex = index;
         break;
       }
@@ -49,7 +86,7 @@ function selectHistoryIndices(chat: STMessage[], floor: number, rounds: number):
     let aiIndex = -1;
     for (let index = userIndex - 1; index >= 0; index -= 1) {
       const message = chat[index];
-      if (message && !message.is_user && !message.is_system) {
+      if (isStoryAssistantMessage(message)) {
         aiIndex = index;
         break;
       }
@@ -63,6 +100,45 @@ function selectHistoryIndices(chat: STMessage[], floor: number, rounds: number):
     }
   }
   return selected;
+}
+
+export interface SerializedRewriteHistory {
+  historyReference: string;
+  latestUserMessage: string;
+  messageCount: number;
+}
+
+export function serializeRewriteHistory(
+  chat: STMessage[],
+  indices: number[],
+  userName: string,
+  characterName: string,
+): SerializedRewriteHistory {
+  const entries = indices
+    .map(index => {
+      const message = chat[index];
+      const text = message ? cleanStoryContextText(message.mes) : '';
+      return message && text ? { index, message, text } : null;
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => !!entry);
+  const latest = entries.at(-1);
+  const latestUser = latest?.message.is_user ? latest : null;
+  const referenceEntries = latestUser ? entries.slice(0, -1) : entries;
+  const historyReference = referenceEntries
+    .map(({ index, message, text }) => {
+      const speaker = message.is_user
+        ? message.name || userName || 'User'
+        : message.name || characterName || 'Char';
+      const hidden = message.is_system ? '｜ST 隐藏' : '';
+      return `[楼层 #${index}｜${speaker}${hidden}]\n${text}`;
+    })
+    .join('\n\n');
+
+  return {
+    historyReference,
+    latestUserMessage: latestUser?.text ?? '',
+    messageCount: entries.length,
+  };
 }
 
 function joinWorldInfoChunks(chunks: string[]): string {
@@ -238,30 +314,30 @@ export async function collectRewriteStoryContext(
   const context = getContext();
   if (!context) throw new Error('SillyTavern 上下文不可用');
   const indices = selectHistoryIndices(context.chat, floor, contextRounds);
-  const history = indices
-    .map(index => context.chat[index])
-    .filter((message): message is STMessage => !!message)
-    .map<ChatMessage>(message => ({
-      role: message.is_user ? 'user' : 'assistant',
-      content: message.mes,
-    }));
+  const history = serializeRewriteHistory(
+    context.chat,
+    indices,
+    context.name1 || 'User',
+    context.name2 || 'Char',
+  );
   const scanText = [
     ...indices.map(index => {
       const message = context.chat[index];
       const name = message?.is_user
         ? context.name1 || 'User'
         : message?.name || context.name2 || 'Char';
-      return message ? `${name}: ${cleanForWorldInfo(message.mes)}` : '';
+      return message ? `${name}: ${cleanStoryContextText(message.mes)}` : '';
     }),
-    `${context.name2 || 'Char'}: ${cleanForWorldInfo(currentText)}`,
+    `${context.name2 || 'Char'}: ${cleanStoryContextText(currentText)}`,
   ].filter(Boolean);
 
   const [worldInfo] = await Promise.all([fetchWorldInfo(scanText, floor)]);
   return {
-    history,
+    historyReference: history.historyReference,
+    latestUserMessage: history.latestUserMessage,
     worldInfo,
     charCard: fetchCharCard(),
     persona: fetchUserPersona(),
-    historyMessageCount: history.length,
+    historyMessageCount: history.messageCount,
   };
 }

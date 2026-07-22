@@ -1,4 +1,4 @@
-import { openPen } from '@/state/ui';
+import { openFloorPicker, openPen } from '@/state/ui';
 import { getContext } from '@/st/context';
 
 const MENU_ITEM_ID = 'bby-menu-item';
@@ -25,17 +25,18 @@ export function injectMenuButton(): void {
       const floor = Number(message?.getAttribute('mesid'));
       const context = getContext();
       const chatMessage = context?.chat?.[floor];
-      if (!editor || !Number.isInteger(floor) || !chatMessage) {
-        toastr?.warning?.('请先进入一条消息的编辑状态', '柏宝砚');
-        $('#extensionsMenu').hide();
-        return;
+      if (editor && Number.isInteger(floor) && chatMessage) {
+        // 正在编辑某条消息:直接对当前编辑区开砚
+        openPen(
+          editor.value,
+          floor,
+          message?.querySelector<HTMLElement>('.name_text')?.textContent?.trim() || chatMessage.name,
+          context?.getCurrentChatId?.() ?? '',
+        );
+      } else {
+        // 未在编辑态:先给楼层列表,选一楼后自动进入该楼编辑
+        openFloorPicker();
       }
-      openPen(
-        editor.value,
-        floor,
-        message?.querySelector<HTMLElement>('.name_text')?.textContent?.trim() || chatMessage.name,
-        context?.getCurrentChatId?.() ?? '',
-      );
       $('#extensionsMenu').hide();
     });
     menu.append(item);

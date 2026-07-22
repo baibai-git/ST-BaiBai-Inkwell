@@ -16,7 +16,8 @@ const expanded = ref(props.open);
 <template>
   <section class="bby-collapsible" :class="{ 'is-open': expanded }">
     <button class="bby-collapsible-head" type="button" :aria-expanded="expanded" @click="expanded = !expanded">
-      <span>{{ title }}</span>
+      <span class="bby-collapsible-title">{{ title }}</span>
+      <slot name="badge" />
       <Icon name="chevron" class="bby-collapsible-chevron" />
     </button>
     <div class="bby-collapsible-outer">
@@ -41,7 +42,7 @@ const expanded = ref(props.open);
   width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 14px 16px;
   border: 0;
   background: transparent;
@@ -51,6 +52,12 @@ const expanded = ref(props.open);
   font-weight: 600;
   text-align: left;
   transition: background var(--bby-duration) var(--bby-ease);
+}
+
+/* 标题占满剩余宽度,把徽标与箭头挤到最右 */
+.bby-collapsible-title {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .bby-collapsible-head:hover {

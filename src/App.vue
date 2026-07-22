@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { fetchModels, testChannel as testApiChannel } from '@/api/client';
+import { CHAIN_OF_THOUGHT_PROMPT, JAILBREAK_PROMPT } from '@/api/prompts';
 import { rewriteCurrentFloor, type RewriteChange } from '@/api/rewrite';
-import { penSettings, type QuickPhrase } from '@/api/settings';
+import { penSettings, type PenSettings, type QuickPhrase, type ReplaceRule } from '@/api/settings';
 import {
   bookUpdatePromptOpen,
   canEditChannels,
@@ -17,6 +18,9 @@ import {
 import Collapsible from '@/components/Collapsible.vue';
 import Icon from '@/components/Icon.vue';
 import ModalMask from '@/components/ModalMask.vue';
+import PhrasePicker from '@/components/PhrasePicker.vue';
+import { buildFloorPreview } from '@/st/floorPreview';
+import { applyFloorText, openFloorInPen } from '@/st/openFloor';
 import {
   closePen,
   cycleTheme,
@@ -26,9 +30,9 @@ import {
   THEMES,
   ui,
 } from '@/state/ui';
-import { getContext } from '@/st/context';
+import { getContext, getOpenChatId } from '@/st/context';
 import { PLUGIN_VERSION } from '@/version';
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 
 const expandedId = ref<number | null>(null);
 const selectedChannelId = ref('');
@@ -48,12 +52,18 @@ const rewriteChanges = ref<RewriteChange[]>([]);
 const reviewDecision = ref<Record<number, 'accept' | 'reject'>>({});
 const generationError = ref('');
 const generating = ref(false);
+const saving = ref(false);
 const contextSummary = ref('');
 let requestController: AbortController | null = null;
 
 const phrases = computed(() =>
   [...penSettings.phrases].sort((left, right) => Number(right.favorite) - Number(left.favorite)),
 );
+
+/* —— 工作台:段落标注是主体;整体要求与机械替换为顶部折叠区 —— */
+const generalFilled = computed(() => !!generalNote.value.trim() || globalPhraseIds.value.length > 0);
+const enabledRuleCount = computed(() => penSettings.replaceRules.filter(rule => rule.enabled).length);
+
 const markedCount = computed(() => ui.paragraphs.filter(paragraph => isMarked(paragraph.id)).length);
 const hasInstructions = computed(
   () =>
@@ -103,6 +113,21 @@ watch(
 );
 
 watch(
+  () => penSettings.theme,
+  theme => {
+    if (ui.theme !== theme) ui.theme = theme;
+  },
+  { immediate: true },
+);
+
+watch(
+  () => ui.theme,
+  theme => {
+    if (penSettings.theme !== theme) penSettings.theme = theme;
+  },
+);
+
+watch(
   () => channels.map(channel => channel.id),
   ids => {
     if (selectedChannelId.value && !ids.includes(selectedChannelId.value)) {
@@ -148,21 +173,6 @@ function saveNote(): void {
   paragraphNotes.value[expandedId.value] = customNote.value;
 }
 
-function togglePhrase(paragraphId: number, phraseId: number): void {
-  const list =
-    markedPhrases.value[paragraphId] ??
-    (markedPhrases.value[paragraphId] = []);
-  const index = list.indexOf(phraseId);
-  if (index >= 0) list.splice(index, 1);
-  else list.push(phraseId);
-}
-
-function toggleGlobalPhrase(phraseId: number): void {
-  const index = globalPhraseIds.value.indexOf(phraseId);
-  if (index >= 0) globalPhraseIds.value.splice(index, 1);
-  else globalPhraseIds.value.push(phraseId);
-}
-
 function clearMark(id: number): void {
   markedPhrases.value[id] = [];
   paragraphNotes.value[id] = '';
@@ -177,8 +187,209 @@ function rememberSelectedChannel(): void {
   penSettings.defaultChannelId = selectedChannelId.value;
 }
 
+/* —— 底栏渠道:自绘菜单(原生 select 的展开列表是浏览器样式,改不了) —— */
+const channelMenuOpen = ref(false);
+const channelMenu = ref<HTMLElement | null>(null);
+
+const selectedChannelLabel = computed(() => {
+  if (!selectedChannelId.value) return '跟随主 API';
+  const channel = channels.find(item => item.id === selectedChannelId.value);
+  if (!channel) return '跟随主 API';
+  return `${channel.name || '未命名渠道'} · ${channel.model || '未设模型'}`;
+});
+
+function toggleChannelMenu(): void {
+  channelMenuOpen.value = !channelMenuOpen.value;
+}
+
+function pickChannel(id: string): void {
+  selectedChannelId.value = id;
+  rememberSelectedChannel();
+  channelMenuOpen.value = false;
+}
+
+function onChannelMenuDocDown(event: PointerEvent): void {
+  if (channelMenu.value && !event.composedPath().includes(channelMenu.value)) {
+    channelMenuOpen.value = false;
+  }
+}
+
+function onChannelMenuKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') channelMenuOpen.value = false;
+}
+
+watch(channelMenuOpen, open => {
+  // 组件在 shadow root 里,composedPath 能穿过 shadow 边界,据此判断点在外部
+  if (open) {
+    document.addEventListener('pointerdown', onChannelMenuDocDown, true);
+    document.addEventListener('keydown', onChannelMenuKeydown, true);
+  } else {
+    document.removeEventListener('pointerdown', onChannelMenuDocDown, true);
+    document.removeEventListener('keydown', onChannelMenuKeydown, true);
+  }
+});
+
+/* —— 楼层列表(魔法棒入口):列出当前聊天可改写的楼层,新的在前 —— */
+interface FloorRow {
+  floor: number;
+  name: string;
+  isUser: boolean;
+  /** 已隐藏楼层(is_system):不参与上下文,列表里以小幽灵标注 */
+  hidden: boolean;
+}
+
+interface FloorPreviewRow extends FloorRow {
+  preview: string;
+}
+
+const FLOOR_PAGE_SIZE = 20;
+const floorRows = ref<FloorRow[]>([]);
+const floorChatOpen = ref(false);
+const floorPage = ref(0);
+const floorQuery = ref('');
+const floorSearchOpen = ref(false);
+const floorSearchInput = ref<HTMLInputElement | null>(null);
+const floorPanel = ref<HTMLElement | null>(null);
+
+// 搜索框默认收成一个小图标,点击展开并自动聚焦;再点图标/Esc 清空并收起
+async function toggleFloorSearch(): Promise<void> {
+  if (floorSearchOpen.value) {
+    closeFloorSearch();
+    return;
+  }
+  floorSearchOpen.value = true;
+  await nextTick();
+  floorSearchInput.value?.focus();
+}
+
+function closeFloorSearch(): void {
+  floorQuery.value = '';
+  floorSearchOpen.value = false;
+}
+
+function onFloorSearchBlur(): void {
+  if (!floorQuery.value.trim()) floorSearchOpen.value = false;
+}
+
+// 默认只列 AI 楼层;「显示 User 消息」开关打开后才带上用户楼层
+const visibleFloorRows = computed(() =>
+  penSettings.showUserFloors ? floorRows.value : floorRows.value.filter(row => !row.isUser),
+);
+
+// 搜索:纯数字时把该楼层号精确命中置顶,同时保留按关键词命中的结果
+const filteredFloorRows = computed(() => {
+  const query = floorQuery.value.trim().toLowerCase();
+  if (!query) return visibleFloorRows.value;
+  const chat = getContext()?.chat ?? [];
+  const matched = visibleFloorRows.value.filter(row => {
+    const rawText = chat[row.floor]?.mes;
+    return (
+      row.name.toLowerCase().includes(query) ||
+      (typeof rawText === 'string' && rawText.toLowerCase().includes(query))
+    );
+  });
+  if (!/^\d+$/.test(query)) return matched;
+  const exact = visibleFloorRows.value.find(row => row.floor === Number(query));
+  if (!exact) return matched;
+  return [exact, ...matched.filter(row => row.floor !== exact.floor)];
+});
+
+const floorPageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredFloorRows.value.length / FLOOR_PAGE_SIZE)),
+);
+const pagedFloorRows = computed<FloorPreviewRow[]>(() => {
+  const chat = getContext()?.chat ?? [];
+  return filteredFloorRows.value
+    .slice(floorPage.value * FLOOR_PAGE_SIZE, (floorPage.value + 1) * FLOOR_PAGE_SIZE)
+    .map(row => ({
+      ...row,
+      preview: buildFloorPreview(chat[row.floor]?.mes ?? ''),
+    }));
+});
+const floorPagerInfo = computed(() => {
+  const head = floorQuery.value.trim() ? `匹配 ${filteredFloorRows.value.length} 楼` : `共 ${visibleFloorRows.value.length} 楼`;
+  return `${head} · 第 ${floorPage.value + 1} / ${floorPageCount.value} 页`;
+});
+
+watch(floorQuery, () => {
+  floorPage.value = 0;
+});
+
+watch(
+  () => penSettings.showUserFloors,
+  () => {
+    floorPage.value = 0;
+  },
+);
+
+watch(floorPage, () => {
+  floorPanel.value?.scrollTo({ top: 0 });
+});
+
+// ST 的 chat 不是响应式的,computed 会缓存旧聊天;每次进入楼层页时重建
+function refreshFloorRows(): void {
+  const context = getContext();
+  const chatId = getOpenChatId(context);
+  floorChatOpen.value = !!chatId;
+  if (!chatId) {
+    floorRows.value = [];
+    ui.floor = null;
+    ui.floorLabel = '';
+    ui.speaker = '';
+    ui.originalText = '';
+    ui.chatId = '';
+    ui.paragraphs = [];
+    floorPage.value = 0;
+    floorQuery.value = '';
+    floorSearchOpen.value = false;
+    return;
+  }
+
+  if (ui.chatId && ui.chatId !== chatId) {
+    ui.floor = null;
+    ui.floorLabel = '';
+    ui.speaker = '';
+    ui.originalText = '';
+    ui.chatId = '';
+    ui.paragraphs = [];
+  }
+
+  const chat = context?.chat ?? [];
+  const rows: FloorRow[] = [];
+  chat.forEach((message, index) => {
+    if (!message || message.mes == null) return;
+    rows.push({
+      floor: index,
+      name: message.name || (message.is_user ? 'User' : 'Char'),
+      isUser: message.is_user === true,
+      hidden: message.is_system === true,
+    });
+  });
+  floorRows.value = rows.reverse();
+  floorPage.value = 0;
+  floorQuery.value = '';
+  floorSearchOpen.value = false;
+}
+
+watch(
+  () => [ui.open, ui.page] as const,
+  ([open, page]) => {
+    if (open && page === 'floors') refreshFloorRows();
+  },
+  { immediate: true },
+);
+
+function enterFloor(floor: number): void {
+  const ok = openFloorInPen(floor);
+  if (!ok) showToast('无法打开该楼层');
+}
+
+function goToWorkspace(): void {
+  ui.page = ui.floor == null ? 'floors' : 'workspace';
+}
+
 async function startReview(): Promise<void> {
-  if (generating.value) return;
+  if (generating.value || saving.value) return;
   saveNote();
   if (!hasInstructions.value) {
     showToast('请先添加段落标注或整体要求');
@@ -252,28 +463,12 @@ function backToAnnotate(): void {
   ui.stage = 'annotate';
 }
 
-function finishReview(): void {
-  if (generating.value) return;
+async function finishReview(): Promise<void> {
+  if (generating.value || saving.value) return;
   if (ui.floor == null || !rewriteChanges.value.length) return;
   if (acceptedCount.value === 0) {
     closePen();
-    toastr?.info?.('已丢弃全部改写结果，编辑区未发生变化', '柏宝砚');
-    return;
-  }
-  const context = getContext();
-  if (ui.chatId && context?.getCurrentChatId?.() !== ui.chatId) {
-    showToast('当前聊天已经切换，不能应用结果');
-    return;
-  }
-  const editor = document.querySelector<HTMLTextAreaElement>(
-    `#chat .mes[mesid="${ui.floor}"] #curEditTextarea`,
-  );
-  if (!editor) {
-    showToast('当前楼层已退出编辑，不能应用结果');
-    return;
-  }
-  if (editor.value !== ui.originalText) {
-    showToast('编辑区内容已经变化，请重新打开砚');
+    toastr?.info?.('已丢弃全部改写结果，原楼层未发生变化', '柏宝砚');
     return;
   }
   const accepted = new Map(
@@ -281,10 +476,30 @@ function finishReview(): void {
       .filter(change => reviewDecision.value[change.paragraph] === 'accept')
       .map(change => [change.paragraph, change.replacement] as const),
   );
-  editor.value = applyParagraphReplacements(ui.originalText, accepted);
-  editor.dispatchEvent(new Event('input', { bubbles: true }));
-  closePen();
-  toastr?.info?.('改写结果已写入编辑区，请使用 ST 的保存按钮确认', '柏宝砚');
+  const nextText = applyParagraphReplacements(ui.originalText, accepted);
+
+  saving.value = true;
+  try {
+    const result = await applyFloorText(ui.floor, ui.originalText, nextText, ui.chatId);
+    if (result === 'chat-changed') {
+      showToast('当前聊天已经切换，不能应用结果');
+      return;
+    }
+    if (result === 'floor-changed') {
+      showToast('楼层内容已经变化，请重新打开砚');
+      return;
+    }
+    if (result !== 'saved') {
+      showToast('无法保存当前楼层');
+      return;
+    }
+    closePen();
+    toastr?.info?.(`改写结果已保存到楼层 #${ui.floor}`, '柏宝砚');
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '保存楼层失败');
+  } finally {
+    saving.value = false;
+  }
 }
 
 function showToast(message: string): void {
@@ -392,6 +607,113 @@ function removePhrase(): void {
   phraseDraft.value = null;
 }
 
+/* —— 机械替换:规则全局保存,勾选启用;执行逻辑还没接,现在只有界面 —— */
+const ruleDraft = ref<ReplaceRule | null>(null);
+
+// 快速替换行:一次性查找替换的即时入口(功能待接,先做界面)
+const quickFind = ref('');
+const quickReplacement = ref('');
+const quickIsRegex = ref(false);
+
+function runQuickReplace(): void {
+  showToast('替换执行逻辑还没接，先看界面');
+}
+
+function saveQuickAsRule(): void {
+  openRule({
+    id: Date.now(),
+    name: '',
+    pattern: quickFind.value,
+    replacement: quickReplacement.value,
+    isRegex: quickIsRegex.value,
+    enabled: true,
+  });
+}
+
+function openRule(rule?: ReplaceRule): void {
+  ruleDraft.value = rule
+    ? JSON.parse(JSON.stringify(rule))
+    : { id: Date.now(), name: '', pattern: '', replacement: '', isRegex: false, enabled: true };
+}
+
+function saveRule(): void {
+  if (!ruleDraft.value?.name.trim() || !ruleDraft.value.pattern) {
+    showToast('请填写规则名和匹配内容');
+    return;
+  }
+  const index = penSettings.replaceRules.findIndex(rule => rule.id === ruleDraft.value?.id);
+  if (index >= 0) penSettings.replaceRules[index] = ruleDraft.value;
+  else penSettings.replaceRules.push(ruleDraft.value);
+  ruleDraft.value = null;
+  showToast('替换规则已保存');
+}
+
+function removeRule(): void {
+  if (!ruleDraft.value) return;
+  const index = penSettings.replaceRules.findIndex(rule => rule.id === ruleDraft.value?.id);
+  if (index >= 0) penSettings.replaceRules.splice(index, 1);
+  ruleDraft.value = null;
+}
+
+function runReplace(): void {
+  showToast('替换执行逻辑还没接，先看界面');
+}
+
+/* —— 自定义提示词:列表(破限/思维链),点开在弹窗里编辑大文本 —— */
+type PromptKey = keyof PenSettings['prompts'];
+interface PromptMeta {
+  key: PromptKey;
+  label: string;
+  hint: string;
+  builtin: string;
+}
+const PROMPT_METAS: PromptMeta[] = [
+  {
+    key: 'jailbreak',
+    label: '破限提示词',
+    hint: '作为置顶 system 附加在改写请求里，降低拒答率。留空则用内置默认。',
+    builtin: JAILBREAK_PROMPT,
+  },
+  {
+    key: 'chainOfThought',
+    label: '思维链提示词',
+    hint: '在最终改写任务之后追加，引导模型先审稿判断再返回段落补丁。留空则用内置默认。',
+    builtin: CHAIN_OF_THOUGHT_PROMPT,
+  },
+];
+
+// 正在编辑的提示词;draft 是草稿,点「完成」才写回 penSettings(取消则丢弃)。
+const editingPrompt = ref<PromptMeta | null>(null);
+const promptDraft = ref('');
+
+// 该提示词是否已自定义(非空即视为已覆盖内置)
+function isCustomPrompt(key: PromptKey): boolean {
+  return penSettings.prompts[key].trim().length > 0;
+}
+
+function openPrompt(meta: PromptMeta): void {
+  editingPrompt.value = meta;
+  // 已自定义→载入用户内容;未自定义→预填内置模板,方便直接在其上改
+  promptDraft.value = penSettings.prompts[meta.key].trim() || meta.builtin;
+}
+function closePrompt(): void {
+  editingPrompt.value = null;
+  promptDraft.value = '';
+}
+function savePrompt(): void {
+  const meta = editingPrompt.value;
+  if (!meta) return;
+  // 草稿与内置完全一致→存空串(回落内置),避免把模板冗余存进设置、也便于显示「默认」
+  const v = promptDraft.value.trim();
+  penSettings.prompts[meta.key] = v === meta.builtin.trim() ? '' : promptDraft.value;
+  closePrompt();
+  showToast('提示词已保存');
+}
+// 「恢复默认」:把草稿重置回内置模板(保存后即回落内置)
+function resetPrompt(): void {
+  if (editingPrompt.value) promptDraft.value = editingPrompt.value.builtin;
+}
+
 let pressedOnOverlay = false;
 
 function onOverlayPointerDown(event: PointerEvent): void {
@@ -435,7 +757,10 @@ function onOverlayClick(event: MouseEvent): void {
           </header>
 
           <nav class="bby-main-nav" aria-label="主导航">
-            <button type="button" :class="{ 'is-active': ui.page === 'workspace' }" @click="ui.page = 'workspace'">
+            <button type="button" :class="{ 'is-active': ui.page === 'floors' }" @click="ui.page = 'floors'">
+              <Icon name="list" /> 楼层
+            </button>
+            <button type="button" :class="{ 'is-active': ui.page === 'workspace' }" :disabled="ui.floor == null" @click="goToWorkspace">
               <Icon name="workspace" /> 工作台
             </button>
             <button type="button" :class="{ 'is-active': ui.page === 'settings' }" @click="ui.page = 'settings'">
@@ -443,57 +768,148 @@ function onOverlayClick(event: MouseEvent): void {
             </button>
           </nav>
 
-          <Transition name="bby-page" mode="out-in">
+          <div class="bby-page-stage">
+          <Transition name="bby-page">
             <div v-if="ui.page === 'workspace'" key="workspace" class="bby-page-shell">
-              <div class="bby-doc-bar">
+              <div v-if="ui.stage === 'annotate'" class="bby-work-tabs bby-status-strip">
+                <span class="bby-floor-number">{{ ui.floorLabel }}</span>
+                <span>已标注 <b>{{ markedCount }}</b> 段</span>
+              </div>
+
+              <div v-else class="bby-work-tabs bby-review-bar">
                 <div class="bby-floor-meta">
                   <span class="bby-floor-number">{{ ui.floorLabel }}</span>
                   <strong>{{ ui.speaker }}</strong>
-                  <span>当前编辑区</span>
                 </div>
                 <div class="bby-doc-status">
-                  <span v-if="ui.stage === 'annotate'">已标注 <b>{{ markedCount }}</b> 段</span>
-                  <template v-else>
-                    <span>AI 建议 <b>{{ reviewRows.length }}</b> 段 · 已选 <b>{{ acceptedCount }}</b> 段</span>
-                    <button class="bby-text-action" type="button" @click="backToAnnotate">
-                      <Icon name="undo" /> 返回标注
-                    </button>
-                  </template>
+                  <span>AI 建议 <b>{{ reviewRows.length }}</b> 段 · 已选 <b>{{ acceptedCount }}</b> 段</span>
+                  <button class="bby-text-action" type="button" @click="backToAnnotate">
+                    <Icon name="undo" /> 返回标注
+                  </button>
                 </div>
               </div>
 
               <main v-if="ui.stage === 'annotate'" class="bby-document" aria-label="楼层全文">
-                <section class="bby-general-editor">
-                  <div class="bby-para-editor-head">
-                    <span>整体要求</span>
-                    <span class="bby-context-label">上下文 {{ contextRounds }} 轮</span>
-                  </div>
-                  <div v-if="phrases.length" class="bby-phrase-picker">
-                    <button
-                      v-for="phrase in phrases"
-                      :key="phrase.id"
-                      type="button"
-                      :class="{ 'is-selected': globalPhraseIds.includes(phrase.id) }"
-                      @click="toggleGlobalPhrase(phrase.id)"
-                    >
-                      <Icon v-if="globalPhraseIds.includes(phrase.id)" name="check" />
-                      {{ phrase.name }}
-                    </button>
-                  </div>
-                  <textarea
-                    v-model="generalNote"
-                    class="bby-input bby-general-note"
-                    placeholder="可选：填写作用于当前楼层全文的要求"
-                  ></textarea>
-                  <div class="bby-context-control">
-                    <label>
-                      <span>携带上下文轮数</span>
-                      <input v-model.number="contextRounds" class="bby-input" type="number" min="0" max="10" step="1" />
-                    </label>
-                    <span>一轮为上一条 AI 消息及其后的用户输入</span>
-                  </div>
-                </section>
+                <Collapsible title="整体要求" class="bby-work-fold">
+                  <template #badge>
+                    <i v-if="generalFilled" class="bby-tab-dot"></i>
+                  </template>
+                  <section class="bby-general-editor">
+                    <p class="bby-field-hint">作用于当前楼层全文的要求，与段落标注一起发给 AI。</p>
+                    <PhrasePicker v-if="phrases.length" v-model="globalPhraseIds" :phrases="phrases" />
+                    <textarea
+                      v-model="generalNote"
+                      class="bby-input bby-general-note"
+                      placeholder="可选：填写作用于当前楼层全文的要求"
+                    ></textarea>
+                    <div class="bby-context-control">
+                      <label>
+                        <span>携带上下文轮数</span>
+                        <input v-model.number="contextRounds" class="bby-input" type="number" min="0" max="10" step="1" />
+                      </label>
+                      <span>一轮为上一条 AI 消息及其后的用户输入</span>
+                    </div>
+                  </section>
+                </Collapsible>
 
+                <Collapsible title="机械替换" class="bby-work-fold">
+                  <template #badge>
+                    <em v-if="enabledRuleCount" class="bby-tab-count">{{ enabledRuleCount }}</em>
+                  </template>
+                  <section class="bby-replace-panel">
+                    <div class="bby-quick-replace">
+                      <div class="bby-quick-fields">
+                        <input
+                          v-model="quickFind"
+                          class="bby-input bby-mono"
+                          type="text"
+                          placeholder="查找"
+                        />
+                        <input
+                          v-model="quickReplacement"
+                          class="bby-input bby-mono"
+                          type="text"
+                          placeholder="替换为（留空即删除）"
+                        />
+                      </div>
+                      <div class="bby-quick-actions">
+                        <label class="bby-quick-regex">
+                          <input v-model="quickIsRegex" type="checkbox" class="bby-checkbox" />
+                          <span>正则</span>
+                        </label>
+                        <button
+                          class="bby-button bby-btn-sm"
+                          type="button"
+                          :disabled="!quickFind"
+                          @click="saveQuickAsRule"
+                        >
+                          <Icon name="plus" /> 存为规则
+                        </button>
+                        <button
+                          class="bby-button bby-primary bby-btn-sm"
+                          type="button"
+                          :disabled="!quickFind"
+                          @click="runQuickReplace"
+                        >
+                          <Icon name="replace" /> 替换
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="bby-rule-lib">
+                      <div class="bby-rule-lib-head">
+                        <span class="bby-field-label">规则库</span>
+                        <button class="bby-text-action bby-rule-add" type="button" title="添加规则" @click="openRule()">
+                          <Icon name="plus" />
+                        </button>
+                      </div>
+                      <ul v-if="penSettings.replaceRules.length" class="bby-rule-list">
+                        <li
+                          v-for="rule in penSettings.replaceRules"
+                          :key="rule.id"
+                          class="bby-rule"
+                          :class="{ 'is-off': !rule.enabled }"
+                        >
+                          <input
+                            v-model="rule.enabled"
+                            type="checkbox"
+                            class="bby-checkbox"
+                            :title="rule.enabled ? '停用这条规则' : '启用这条规则'"
+                          />
+                          <button class="bby-rule-open" type="button" @click="openRule(rule)">
+                            <span class="bby-rule-main">
+                              <strong>{{ rule.name }}</strong>
+                              <small>
+                              <code>{{ rule.pattern }}</code>
+                              <span class="bby-rule-sep">→</span>
+                              <code>{{ rule.replacement || '删除' }}</code>
+                            </small>
+                            </span>
+                            <span v-if="rule.isRegex" class="bby-tag">正则</span>
+                            <Icon name="chevron" />
+                          </button>
+                        </li>
+                      </ul>
+                      <p v-else class="bby-rule-empty">还没有规则。把常用的清理存成规则，之后勾选即可反复用。</p>
+
+                      <div class="bby-rule-run">
+                        <span class="bby-replace-summary">
+                          {{ enabledRuleCount ? `已启用 ${enabledRuleCount} 条规则` : '还没有启用的规则' }}
+                        </span>
+                        <button
+                          class="bby-button bby-btn-sm"
+                          type="button"
+                          :disabled="generating || !enabledRuleCount"
+                          @click="runReplace"
+                        >
+                          <Icon name="replace" /> 执行规则
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                </Collapsible>
+
+                <div class="bby-sheet">
                 <article
                   v-for="paragraph in ui.paragraphs"
                   :key="paragraph.id"
@@ -525,18 +941,12 @@ function onOverlayClick(event: MouseEvent): void {
                           <Icon name="trash" />
                         </button>
                       </div>
-                      <div v-if="phrases.length" class="bby-phrase-picker">
-                        <button
-                          v-for="phrase in phrases"
-                          :key="phrase.id"
-                          type="button"
-                          :class="{ 'is-selected': (markedPhrases[paragraph.id] ?? []).includes(phrase.id) }"
-                          @click="togglePhrase(paragraph.id, phrase.id)"
-                        >
-                          <Icon v-if="(markedPhrases[paragraph.id] ?? []).includes(phrase.id)" name="check" />
-                          {{ phrase.name }}
-                        </button>
-                      </div>
+                      <PhrasePicker
+                        v-if="phrases.length"
+                        :model-value="markedPhrases[paragraph.id] ?? []"
+                        :phrases="phrases"
+                        @update:model-value="markedPhrases[paragraph.id] = $event"
+                      />
                       <textarea
                         v-model="customNote"
                         class="bby-input bby-note"
@@ -549,6 +959,7 @@ function onOverlayClick(event: MouseEvent): void {
                     </div>
                   </Transition>
                 </article>
+                </div>
 
                 <p v-if="generationError" class="bby-error-message">{{ generationError }}</p>
               </main>
@@ -596,14 +1007,35 @@ function onOverlayClick(event: MouseEvent): void {
               </main>
 
               <footer class="bby-action-bar">
-                <div class="bby-channel-select">
-                  <span>改写渠道</span>
-                  <select v-model="selectedChannelId" class="bby-input bby-select" @change="rememberSelectedChannel">
-                    <option value="">跟随主 API</option>
-                    <option v-for="channel in channels" :key="channel.id" :value="channel.id">
-                      {{ channel.name }} · {{ channel.model }}
-                    </option>
-                  </select>
+                <div ref="channelMenu" class="bby-channel-menu">
+                  <button
+                    class="bby-channel-ghost"
+                    type="button"
+                    :aria-expanded="channelMenuOpen"
+                    title="改写渠道"
+                    @click="toggleChannelMenu"
+                  >
+                    <Icon name="plug" />
+                    <span class="bby-channel-ghost-name">{{ selectedChannelLabel }}</span>
+                    <Icon name="chevron" class="bby-channel-ghost-chevron" :class="{ 'is-open': channelMenuOpen }" />
+                  </button>
+                  <Transition name="bby-menu">
+                    <ul v-if="channelMenuOpen" class="bby-menu" role="listbox">
+                      <li>
+                        <button type="button" :class="{ 'is-active': !selectedChannelId }" @click="pickChannel('')">
+                          <Icon name="check" class="bby-menu-check" />
+                          <span class="bby-menu-name">跟随主 API</span>
+                        </button>
+                      </li>
+                      <li v-for="channel in channels" :key="channel.id">
+                        <button type="button" :class="{ 'is-active': selectedChannelId === channel.id }" @click="pickChannel(channel.id)">
+                          <Icon name="check" class="bby-menu-check" />
+                          <span class="bby-menu-name">{{ channel.name || '未命名渠道' }}</span>
+                          <span class="bby-menu-model">{{ channel.model || '未设模型' }}</span>
+                        </button>
+                      </li>
+                    </ul>
+                  </Transition>
                 </div>
                 <div class="bby-action-buttons">
                   <button v-if="generating" class="bby-button" type="button" @click="cancelGeneration">
@@ -611,7 +1043,7 @@ function onOverlayClick(event: MouseEvent): void {
                   </button>
                   <button
                     v-if="ui.stage === 'annotate'"
-                    class="bby-button bby-primary bby-btn-sm"
+                    class="bby-button bby-primary"
                     type="button"
                     :disabled="generating || !hasInstructions"
                     @click="startReview"
@@ -620,17 +1052,94 @@ function onOverlayClick(event: MouseEvent): void {
                     {{ generating ? '生成中…' : '生成' }}
                   </button>
                   <template v-else>
-                    <button class="bby-button bby-btn-sm" type="button" :disabled="generating" @click="startReview">
+                    <button class="bby-button" type="button" :disabled="generating" @click="startReview">
                       <Icon name="refresh" :class="{ 'bby-spin': generating }" /> 重新生成
                     </button>
-                    <button class="bby-button bby-primary bby-btn-sm" type="button" :disabled="generating" @click="finishReview">
+                    <button class="bby-button bby-primary" type="button" :disabled="generating || saving" @click="finishReview">
                       <Icon :name="acceptedCount === 0 ? 'trash' : 'check'" />
-                      {{ acceptedCount === 0 ? '丢弃全部' : `应用 ${acceptedCount} 段` }}
+                      {{ saving ? '保存中…' : acceptedCount === 0 ? '丢弃全部' : `应用 ${acceptedCount} 段` }}
                     </button>
                   </template>
                 </div>
               </footer>
             </div>
+
+            <main v-else-if="ui.page === 'floors'" key="floors" class="bby-settings bby-page-shell">
+              <header class="bby-settings-page-head">
+                <h2>选择楼层</h2>
+                <div v-if="floorChatOpen" class="bby-floor-head-actions">
+                  <button
+                    class="bby-floor-search-toggle"
+                    :class="{ 'is-active': floorSearchOpen }"
+                    type="button"
+                    title="搜索楼层"
+                    @mousedown.prevent
+                    @click="toggleFloorSearch"
+                  >
+                    <Icon name="search" />
+                  </button>
+                  <label class="bby-floor-user-toggle">
+                    <input v-model="penSettings.showUserFloors" type="checkbox" class="bby-checkbox" />
+                    <span>显示 User 消息</span>
+                  </label>
+                </div>
+              </header>
+              <div ref="floorPanel" class="bby-floor-scroll">
+                <Transition name="bby-expand">
+                  <div v-if="floorChatOpen && floorSearchOpen" class="bby-floor-search">
+                    <Icon name="search" />
+                    <input
+                      ref="floorSearchInput"
+                      v-model="floorQuery"
+                      class="bby-input"
+                      type="text"
+                      placeholder="搜索楼层号或关键词"
+                      @blur="onFloorSearchBlur"
+                      @keydown.esc.stop="closeFloorSearch"
+                    />
+                  </div>
+                </Transition>
+                <div class="bby-floor-list">
+                  <p v-if="!floorChatOpen" class="bby-field-hint">请先进入一个聊天，之后即可选择需要改写的楼层。</p>
+                  <template v-else>
+                    <button
+                      v-for="row in pagedFloorRows"
+                      :key="row.floor"
+                      class="bby-floor-open"
+                      :class="{ 'is-user': row.isUser, 'is-hidden': row.hidden }"
+                      type="button"
+                      @click="enterFloor(row.floor)"
+                    >
+                      <span class="bby-floor-rail">
+                        <span class="bby-floor-num">{{ row.floor }}</span>
+                      </span>
+                      <span class="bby-floor-main">
+                        <span class="bby-floor-byline">
+                          <strong>{{ row.name }}</strong>
+                          <span v-if="penSettings.showUserFloors" class="bby-floor-role">{{ row.isUser ? 'User' : 'Char' }}</span>
+                          <Icon v-if="row.hidden" name="ghost" class="bby-floor-ghost" title="已隐藏楼层（不参与上下文）" />
+                        </span>
+                        <small>{{ row.preview }}</small>
+                      </span>
+                    </button>
+                    <p v-if="!floorRows.length" class="bby-field-hint">当前聊天没有可改写的楼层。</p>
+                    <p v-else-if="!visibleFloorRows.length" class="bby-field-hint">当前聊天没有 AI 楼层。</p>
+                    <p v-else-if="!filteredFloorRows.length" class="bby-field-hint">没有匹配的楼层。</p>
+                  </template>
+                </div>
+              </div>
+              <div v-if="floorChatOpen && floorPageCount > 1" class="bby-floor-pager">
+                <span class="bby-floor-pager-info">{{ floorPagerInfo }}</span>
+                <div class="bby-floor-pager-buttons">
+                  <button class="bby-icon-mini" type="button" title="上一页" :disabled="floorPage === 0" @click="floorPage--">
+                    <Icon name="chevronLeft" />
+                  </button>
+                  <button class="bby-icon-mini" type="button" title="下一页" :disabled="floorPage >= floorPageCount - 1" @click="floorPage++">
+                    <Icon name="chevronRight" />
+                  </button>
+                </div>
+              </div>
+            </main>
 
             <main v-else key="settings" class="bby-settings bby-page-shell">
               <header class="bby-settings-page-head">
@@ -639,7 +1148,7 @@ function onOverlayClick(event: MouseEvent): void {
               </header>
 
               <div class="bby-settings-sections">
-                <Collapsible title="改写">
+                <Collapsible title="基本设置">
                   <label class="bby-modal-field">
                     <span class="bby-modal-label">默认渠道</span>
                     <select v-model="penSettings.defaultChannelId" class="bby-input bby-select">
@@ -654,6 +1163,21 @@ function onOverlayClick(event: MouseEvent): void {
                     <input v-model.number="penSettings.defaultContextRounds" class="bby-input" type="number" min="0" max="10" step="1" />
                     <span class="bby-field-hint">每轮包含上一条 AI 消息和紧随其后的用户输入。</span>
                   </label>
+                  <div class="bby-field bby-setting-gap">
+                    <div class="bby-field-head"><span class="bby-modal-label">主题</span></div>
+                    <div class="bby-segmented bby-segmented-wrap">
+                      <button
+                        v-for="theme in THEMES"
+                        :key="theme.value"
+                        type="button"
+                        class="bby-seg"
+                        :class="{ 'is-on': ui.theme === theme.value }"
+                        @click="ui.theme = theme.value"
+                      >
+                        <Icon :name="theme.icon" /> {{ theme.label }}
+                      </button>
+                    </div>
+                  </div>
                 </Collapsible>
 
                 <Collapsible title="副 API">
@@ -704,29 +1228,29 @@ function onOverlayClick(event: MouseEvent): void {
                   <p v-else class="bby-field-hint">尚未添加快捷语句。</p>
                 </Collapsible>
 
-                <Collapsible title="界面">
-                  <div class="bby-field">
-                    <div class="bby-field-head"><span class="bby-field-label">主题</span></div>
-                    <div class="bby-segmented bby-segmented-wrap">
-                      <button
-                        v-for="theme in THEMES"
-                        :key="theme.value"
-                        type="button"
-                        class="bby-seg"
-                        :class="{ 'is-on': ui.theme === theme.value }"
-                        @click="ui.theme = theme.value"
-                      >
-                        <Icon :name="theme.icon" /> {{ theme.label }}
+                <Collapsible title="自定义提示词">
+                  <ul class="bby-prompt-list">
+                    <li v-for="meta in PROMPT_METAS" :key="meta.key" class="bby-prompt-item">
+                      <button class="bby-prompt-open" type="button" @click="openPrompt(meta)">
+                        <span class="bby-prompt-name">{{ meta.label }}</span>
+                        <span class="bby-prompt-state" :class="{ 'is-custom': isCustomPrompt(meta.key) }">
+                          {{ isCustomPrompt(meta.key) ? '已自定义' : '默认' }}
+                        </span>
+                        <Icon name="pen" class="bby-prompt-edit" />
                       </button>
-                    </div>
-                  </div>
+                    </li>
+                  </ul>
                 </Collapsible>
               </div>
             </main>
           </Transition>
+          </div>
 
           <nav class="bby-mobile-nav" aria-label="移动端导航">
-            <button :class="{ 'is-active': ui.page === 'workspace' }" type="button" @click="ui.page = 'workspace'">
+            <button :class="{ 'is-active': ui.page === 'floors' }" type="button" @click="ui.page = 'floors'">
+              <Icon name="list" /><span>楼层</span>
+            </button>
+            <button :class="{ 'is-active': ui.page === 'workspace' }" type="button" :disabled="ui.floor == null" @click="goToWorkspace">
               <Icon name="workspace" /><span>工作台</span>
             </button>
             <button :class="{ 'is-active': ui.page === 'settings' }" type="button" @click="ui.page = 'settings'">
@@ -849,6 +1373,61 @@ function onOverlayClick(event: MouseEvent): void {
           <button class="bby-button bby-danger" type="button" @click="removePhrase"><Icon name="trash" /> 删除</button>
           <span class="bby-modal-foot-spacer"></span>
           <button class="bby-button bby-primary" type="button" @click="savePhrase">完成</button>
+        </footer>
+      </div>
+    </ModalMask>
+
+    <ModalMask :open="!!ruleDraft" @close="ruleDraft = null">
+      <div v-if="ruleDraft" class="bby-modal" role="dialog" aria-modal="true" aria-label="编辑替换规则">
+        <header class="bby-modal-head">
+          <span class="bby-modal-title">编辑替换规则</span>
+          <button class="bby-icon-mini" type="button" title="关闭" @click="ruleDraft = null"><Icon name="close" /></button>
+        </header>
+        <label class="bby-modal-field">
+          <span class="bby-modal-label">规则名</span>
+          <input v-model="ruleDraft.name" class="bby-input" placeholder="例如：统一角色名" />
+        </label>
+        <label class="bby-modal-field">
+          <span class="bby-modal-label">匹配内容</span>
+          <input v-model="ruleDraft.pattern" class="bby-input bby-mono" placeholder="要查找的文字或正则表达式" />
+        </label>
+        <label class="bby-modal-field">
+          <span class="bby-modal-label">替换为</span>
+          <input v-model="ruleDraft.replacement" class="bby-input bby-mono" placeholder="留空则删除匹配内容" />
+        </label>
+        <label class="bby-switch-row">
+          <span class="bby-modal-label">使用正则表达式</span>
+          <input v-model="ruleDraft.isRegex" type="checkbox" class="bby-checkbox" />
+        </label>
+        <p v-if="ruleDraft.isRegex" class="bby-field-hint">全局替换所有匹配；可用 $1、$2 引用捕获组。</p>
+        <footer class="bby-modal-foot">
+          <button class="bby-button bby-danger" type="button" @click="removeRule"><Icon name="trash" /> 删除</button>
+          <span class="bby-modal-foot-spacer"></span>
+          <button class="bby-button bby-primary" type="button" @click="saveRule">完成</button>
+        </footer>
+      </div>
+    </ModalMask>
+
+    <ModalMask :open="!!editingPrompt" @close="closePrompt">
+      <div v-if="editingPrompt" class="bby-modal bby-modal-wide" role="dialog" aria-modal="true" :aria-label="`编辑${editingPrompt.label}`">
+        <header class="bby-modal-head">
+          <span class="bby-modal-title">编辑{{ editingPrompt.label }}</span>
+          <button class="bby-icon-mini" type="button" title="关闭" @click="closePrompt"><Icon name="close" /></button>
+        </header>
+        <p class="bby-field-hint">{{ editingPrompt.hint }}</p>
+        <textarea
+          v-model="promptDraft"
+          class="bby-input bby-prompt-area"
+          spellcheck="false"
+          rows="16"
+        ></textarea>
+        <footer class="bby-modal-foot">
+          <button class="bby-button bby-danger" type="button" @click="resetPrompt">
+            <Icon name="refresh" /> 恢复默认
+          </button>
+          <span class="bby-modal-foot-spacer"></span>
+          <button class="bby-button" type="button" @click="closePrompt">取消</button>
+          <button class="bby-button bby-primary" type="button" @click="savePrompt">完成</button>
         </footer>
       </div>
     </ModalMask>

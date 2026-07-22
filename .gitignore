@@ -1,0 +1,47 @@
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
+pnpm-workspace.yaml
+
+# Build and test caches
+.vite/
+.cache/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Local preview and screenshots
+.preview/
+
+# AI tool state and instructions
+.agents/
+.claude/
+.codex/
+.kimi/
+.aionrs/
+.gemini/
+.cursor/
+.windsurf/
+.continue/
+.roo/
+.trae/
+.qoder/
+.openai/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# Editors and operating systems
+.idea/
+.vscode/
+.vs/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and local environment files
+*.log
+*.log.*
+.env
+.env.*
+!.env.example

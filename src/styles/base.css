@@ -1,0 +1,1482 @@
+/*
+ * 基础样式:作用域全部收在 .bby-root 下,避免污染 ST 宿主页面。
+ * 不写颜色字面量,一律取 theme.css 的变量(与柏宝书同源的原子类,前缀 bby-)。
+ */
+
+/* shadow root 宿主:回到初始值,切断从 ST 继承下来的排版属性。 */
+:host {
+  all: initial;
+}
+
+.bby-root,
+.bby-root * {
+  box-sizing: border-box;
+}
+
+.bby-root {
+  font-family: var(--bby-font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--bby-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 只继承字体族,不用 font 简写:简写会连 font-size 一起继承,
+   且 .bby-root button 优先级高过 .bby-btn-sm 等单类规则,会把控件字号全压成 14px。
+   控件字号由各原子类(.bby-button/.bby-btn-sm/.bby-input…)自己声明,与柏宝书同款。 */
+.bby-root button,
+.bby-root input,
+.bby-root textarea,
+.bby-root select {
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+/* —— 遮罩层 —— */
+.bby-overlay {
+  position: fixed;
+  /* 不用 inset 简写:部分移动端 WebView 不认,会让高度塌成 auto,
+     进而使子级 height:100% 解析失败。展开成四个属性更稳。 */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bby-overlay);
+  backdrop-filter: blur(3px);
+}
+
+/* —— 窗口外壳 —— */
+.bby-window {
+  position: relative;
+  width: 100%;
+  max-width: var(--bby-win-max-w);
+  height: var(--bby-win-max-h);
+  max-height: var(--bby-win-max-h);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--bby-line);
+  border-radius: var(--bby-radius-window);
+  background: var(--bby-bg);
+  box-shadow: var(--bby-shadow);
+  transition:
+    transform var(--bby-duration) var(--bby-ease),
+    opacity var(--bby-duration) var(--bby-ease);
+}
+
+/* —— 题首 —— */
+.bby-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+
+.bby-brand-name {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--bby-ink);
+}
+
+.bby-header-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.bby-icon-button {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-surface-2);
+  color: var(--bby-ink-soft);
+  cursor: pointer;
+  font-size: 15px;
+  transition:
+    color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease);
+}
+
+.bby-icon-button:hover {
+  color: var(--bby-ink);
+  background: var(--bby-line-strong);
+}
+
+.bby-danger-hover:hover {
+  color: var(--bby-danger);
+  background: var(--bby-danger-soft);
+}
+
+/* —— 主导航 —— */
+.bby-main-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--bby-line);
+}
+
+.bby-main-nav button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: var(--bby-radius-pill);
+  background: transparent;
+  color: var(--bby-ink-soft);
+  cursor: pointer;
+  transition:
+    background var(--bby-duration) var(--bby-ease),
+    color var(--bby-duration) var(--bby-ease);
+}
+
+.bby-main-nav button:hover {
+  background: var(--bby-surface-2);
+  color: var(--bby-ink);
+}
+
+.bby-main-nav button.is-active {
+  background: var(--bby-accent);
+  color: var(--bby-accent-ink);
+}
+
+.bby-page-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* —— 工作台:顶栏(楼层信息 + 流程状态)—— */
+.bby-doc-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--bby-line);
+  background: var(--bby-bg);
+}
+
+.bby-floor-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.bby-floor-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bby-floor-meta > span:last-child {
+  color: var(--bby-ink-muted);
+  font-size: 12px;
+}
+
+.bby-floor-number {
+  padding: 2px 8px;
+  border: 1px solid var(--bby-line-strong);
+  border-radius: var(--bby-radius-sm);
+  color: var(--bby-ink-soft);
+  font-family: var(--bby-font-mono);
+  font-size: 11px;
+}
+
+.bby-doc-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--bby-ink-muted);
+  font-size: 12px;
+}
+
+.bby-doc-status b {
+  color: var(--bby-accent);
+  font-weight: 700;
+}
+
+/* —— 文档流:段落即工作区,标注编辑区与候选稿都内联在段落下方 —— */
+.bby-document,
+.bby-settings {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.bby-document {
+  flex: 1 1 auto;
+  padding: 8px 28px 32px;
+}
+
+.bby-general-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--bby-line);
+  border-radius: var(--bby-radius);
+  background: var(--bby-surface);
+}
+
+.bby-general-note {
+  min-height: 68px;
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.bby-context-label {
+  color: var(--bby-ink-muted);
+  font-weight: 400;
+}
+
+.bby-context-control {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.bby-context-control label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--bby-ink-soft);
+  font-size: 12px;
+}
+
+.bby-context-control input {
+  width: 68px;
+}
+
+.bby-context-control > span {
+  color: var(--bby-ink-muted);
+  font-size: 11px;
+}
+
+/* 段落块:顶部分隔线串联成文档;左缘色条表达状态(强调=已标注,灰=保留原文) */
+.bby-para {
+  position: relative;
+  padding: 14px 12px 14px 14px;
+  border-top: 1px solid var(--bby-line);
+  transition: background var(--bby-duration) var(--bby-ease);
+}
+
+.bby-para:last-child {
+  border-bottom: 1px solid var(--bby-line);
+}
+
+/* 顶栏自带下边框,首段不再画上边框,避免两条线叠一起 */
+.bby-para:first-child {
+  border-top: 0;
+}
+
+.bby-para::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  border-radius: var(--bby-radius-pill);
+  background: transparent;
+  transition: background var(--bby-duration) var(--bby-ease);
+}
+
+.bby-para.is-marked::before {
+  background: var(--bby-accent);
+}
+
+.bby-para.is-rejected::before {
+  background: var(--bby-line-strong);
+}
+
+.bby-para-text {
+  width: 100%;
+  margin: -4px -8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--bby-radius-sm);
+  background: transparent;
+  color: var(--bby-ink);
+  cursor: pointer;
+  text-align: left;
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.85;
+  transition: background 0.15s var(--bby-ease);
+}
+
+.bby-para-text:disabled {
+  cursor: default;
+}
+
+.bby-para-text:not(:disabled):hover {
+  background: var(--bby-surface-2);
+}
+
+/* 已标注的要求摘要(收起态):小标签列出所选快捷语句 */
+.bby-para-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.bby-tag {
+  padding: 2px 8px;
+  border-radius: var(--bby-radius-pill);
+  background: var(--bby-accent-soft);
+  color: var(--bby-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 内联标注编辑区:跟在段落下方,与原文同宽 */
+.bby-para-editor {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--bby-line);
+  border-radius: var(--bby-radius);
+  background: var(--bby-surface);
+}
+
+.bby-para-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--bby-ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* —— 表单原子(与柏宝书同源)—— */
+.bby-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 18px;
+}
+
+.bby-field:last-child {
+  margin-bottom: 0;
+}
+
+.bby-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bby-field-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bby-ink);
+}
+
+.bby-field-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--bby-ink-muted);
+  line-height: 1.6;
+}
+
+.bby-phrase-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.bby-phrase-picker button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid var(--bby-line-strong);
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-surface);
+  color: var(--bby-ink-soft);
+  cursor: pointer;
+  font-size: 12px;
+  transition:
+    color var(--bby-duration) var(--bby-ease),
+    border-color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease),
+    transform 0.15s var(--bby-ease);
+}
+
+.bby-phrase-picker button.is-selected {
+  border-color: var(--bby-accent);
+  background: var(--bby-accent-soft);
+  color: var(--bby-accent);
+}
+
+.bby-phrase-picker button:active {
+  transform: scale(0.96);
+}
+
+/* —— 通用输入 —— */
+.bby-input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--bby-line-strong);
+  border-radius: var(--bby-radius-sm);
+  outline: none;
+  background: var(--bby-surface);
+  color: var(--bby-ink);
+  font-size: 13px;
+  transition:
+    border-color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease);
+}
+
+.bby-input:focus {
+  outline: none;
+  border-color: var(--bby-accent);
+}
+
+.bby-note {
+  min-height: 84px;
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.bby-text-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--bby-ink-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.bby-text-action:hover {
+  color: var(--bby-accent);
+}
+
+/* —— 底部操作条:瘦条,左渠道右主按钮 —— */
+.bby-action-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 20px;
+  border-top: 1px solid var(--bby-line);
+  background: var(--bby-surface);
+}
+
+.bby-channel-select {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bby-channel-select > span {
+  flex: 0 0 auto;
+  color: var(--bby-ink-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.bby-channel-select .bby-input {
+  width: min(240px, 38vw);
+  /* 与右侧主按钮同高(30px),底栏视觉整齐 */
+  height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+/* 下拉框:去掉原生右侧大留白的箭头,换一枚紧贴文字的自绘小三角(与柏宝书同款) */
+.bby-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9.5 12 15.5 18 9.5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 14px;
+}
+
+.bby-action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+/* 底栏主按钮:与左侧渠道框同高(30px),紧凑不抢眼 */
+.bby-action-buttons .bby-button {
+  height: 30px;
+  padding: 0 12px;
+}
+
+/* —— 通用按钮 —— */
+.bby-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: 1px solid var(--bby-line-strong);
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-surface);
+  color: var(--bby-ink);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color var(--bby-duration) var(--bby-ease),
+    border-color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease),
+    opacity var(--bby-duration) var(--bby-ease);
+}
+
+.bby-button:hover {
+  border-color: var(--bby-accent);
+  color: var(--bby-accent);
+}
+
+.bby-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+.bby-button.bby-primary {
+  border-color: var(--bby-accent);
+  background: var(--bby-accent);
+  color: var(--bby-accent-ink);
+}
+
+.bby-button.bby-primary:hover {
+  color: var(--bby-accent-ink);
+  opacity: 0.9;
+}
+
+@keyframes bby-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.bby-spin {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: bby-spin 0.8s linear infinite;
+}
+
+/* 危险操作按钮:描边低调,hover 才显红,避免误触 */
+.bby-button.bby-danger {
+  color: var(--bby-danger);
+}
+
+.bby-button.bby-danger:hover {
+  border-color: var(--bby-danger);
+  background: var(--bby-danger-soft);
+  color: var(--bby-danger);
+}
+
+/* 小一号按钮:用于「添加渠道」等次级操作 */
+.bby-btn-sm {
+  padding: 6px 11px;
+  font-size: 12px;
+}
+
+/* 测试按钮文字:默认(PC)显完整版,短版藏起;窄屏在媒体查询里互换 */
+.bby-btn-label-short {
+  display: none;
+}
+
+/* —— 候选稿:挂在段落下方,接受=强调描边淡底,保留原文=整体压暗 —— */
+.bby-candidate {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--bby-line);
+  border-radius: var(--bby-radius);
+  background: var(--bby-surface);
+  transition:
+    border-color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease),
+    opacity var(--bby-duration) var(--bby-ease);
+}
+
+.bby-candidate.is-accept {
+  border-color: var(--bby-accent);
+  background: var(--bby-accent-soft);
+}
+
+.bby-candidate.is-reject {
+  opacity: 0.55;
+}
+
+.bby-candidate-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--bby-ink-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.bby-candidate p {
+  margin: 0 0 10px;
+  color: var(--bby-ink-soft);
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.bby-review-document {
+  padding-top: 14px;
+}
+
+.bby-context-summary {
+  margin: 0 0 10px;
+  color: var(--bby-ink-muted);
+  font-size: 11px;
+}
+
+.bby-review-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-top: 1px solid var(--bby-line);
+  transition: opacity var(--bby-duration) var(--bby-ease);
+}
+
+.bby-review-row:last-child {
+  border-bottom: 1px solid var(--bby-line);
+}
+
+.bby-review-row.is-rejected {
+  opacity: 0.55;
+}
+
+.bby-review-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bby-review-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.bby-review-columns > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--bby-line);
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-surface);
+}
+
+.bby-review-row p {
+  margin: 0;
+  color: var(--bby-ink);
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bby-review-row p.bby-deleted-text {
+  color: var(--bby-danger);
+  font-style: italic;
+}
+
+.bby-review-label {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--bby-ink-muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.bby-error-message {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid var(--bby-danger);
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-danger-soft);
+  color: var(--bby-danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* 接受/保留:分段小开关,选中态白底强调字 */
+.bby-decide {
+  align-self: flex-end;
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-surface-2);
+}
+
+.bby-decide button {
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--bby-ink-muted);
+  cursor: pointer;
+  font-size: 11px;
+  transition:
+    color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease);
+}
+
+.bby-decide button.is-active {
+  background: var(--bby-surface);
+  color: var(--bby-accent);
+  font-weight: 650;
+}
+
+/* —— 设置页 —— */
+.bby-settings {
+  overflow-y: auto;
+  padding: var(--bby-page-pad);
+}
+
+.bby-settings-page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.bby-settings-page-head h2 {
+  margin: 0;
+  color: var(--bby-ink);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* 版本标签:实心强调底 + 强调上文字色(各主题随 --bby-accent 自适应) */
+.bby-ver {
+  padding: 7px 12px;
+  border-radius: var(--bby-radius-pill);
+  background: var(--bby-accent);
+  color: var(--bby-accent-ink);
+  font-family: var(--bby-font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.bby-settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bby-setting-gap {
+  margin-top: 14px;
+}
+
+.bby-section-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+/* 渠道:顶部操作条(标签 + 添加按钮) */
+.bby-channel-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.bby-channel-compat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--bby-line);
+}
+
+.bby-channel-compat .bby-field-hint {
+  flex: 1 1 auto;
+}
+
+/* 渠道:紧凑只读列表,每渠道一行,点行进弹窗编辑 */
+.bby-channel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bby-channel-list,
+.bby-phrase-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bby-channel-item {
+  display: flex;
+  align-items: stretch;
+}
+
+/* 行主体:整块可点,左名字右模型 */
+.bby-channel-open {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--bby-line);
+  border-radius: var(--bby-radius);
+  background: var(--bby-surface-2);
+  color: var(--bby-ink);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease);
+}
+
+.bby-channel-open:hover {
+  border-color: var(--bby-accent);
+  background: var(--bby-surface);
+}
+
+/* 渠道名:完整显示,允许换行,占据剩余空间 */
+.bby-channel-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+/* 模型名:次要信息,过长则截断,不挤占名字 */
+.bby-channel-model {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bby-ink-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bby-phrase-list > button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--bby-line);
+  border-radius: var(--bby-radius);
+  background: var(--bby-surface-2);
+  color: var(--bby-ink);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    color var(--bby-duration) var(--bby-ease),
+    border-color var(--bby-duration) var(--bby-ease),
+    background var(--bby-duration) var(--bby-ease),
+    transform 0.15s var(--bby-ease);
+}
+
+.bby-phrase-list > button:hover {
+  border-color: var(--bby-accent);
+  background: var(--bby-surface);
+}
+
+.bby-phrase-list > button:active {
+  transform: scale(0.995);
+}
+
+.bby-phrase-list button > span:nth-child(2) {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.bby-phrase-list strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bby-phrase-list small {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--bby-ink-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bby-phrase-favorite {
+  flex: 0 0 auto;
+  color: var(--bby-line-strong);
+}
+
+.bby-phrase-favorite.is-on {
+  color: var(--bby-accent);
+}
+
+/* —— 分段选择器:主题等少量互斥选项 —— */
+.bby-segmented {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bby-surface-2);
+  border-radius: var(--bby-radius);
+}
+
+/* 选项较多/标签较长:允许换行,窄屏下不溢出 */
+.bby-segmented-wrap {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.bby-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  border: 0;
+  border-radius: var(--bby-radius-sm);
+  background: transparent;
+  color: var(--bby-ink-soft);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background var(--bby-duration) var(--bby-ease),
+    color var(--bby-duration) var(--bby-ease);
+}
+
+.bby-seg:hover {
+  color: var(--bby-ink);
+}
+
+.bby-seg.is-on {
+  background: var(--bby-surface);
+  color: var(--bby-accent);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.08);
+}
+
+/* —— 通用弹窗(渠道/快捷语句编辑等)——
+   弹窗经 ModalMask 组件 Teleport 到 modalHost(.bby-root 直接子级,在滚动容器之外),
+   修复 iOS「可滚动祖先内 fixed 后代定位错乱」。 */
+.bby-modal-mask {
+  position: fixed;
+  /* 与 .bby-overlay 同款展开写法(见其注释):部分移动端 WebView 不认 inset 简写,
+     高度会塌成内容高,align-items:center 随之失效、弹窗挤向顶部跑出屏幕。 */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bby-overlay);
+  backdrop-filter: blur(3px);
+}
+
+.bby-modal {
+  width: 100%;
+  max-width: 520px;
+  max-height: 86vh;
+  max-height: 86dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--bby-line);
+  border-radius: var(--bby-radius-window);
+  background: var(--bby-bg);
+  color: var(--bby-ink);
+  box-shadow: var(--bby-shadow);
+}
+
+/* 标题栏固定:弹窗内容超长时整体滚动,标题+关闭键 sticky 钉在顶部不跟滚。
+   负 margin 抵消 .bby-modal 的 18px 内边距,让标题栏横向铺满、滚动时其不透明背景
+   盖住下方滚上来的内容;top:-18px 贴齐真实顶边。 */
+.bby-modal-head {
+  position: sticky;
+  top: -18px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -18px -18px 0;
+  padding: 18px 18px 12px;
+  background: var(--bby-bg);
+}
+
+.bby-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bby-ink);
+}
+
+.bby-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bby-modal-label {
+  font-size: 12px;
+  color: var(--bby-ink-soft);
+}
+
+/* 输入框 + 右侧小图标按钮(密钥显隐、拉取模型):并排,不叠在框内 */
+.bby-model-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.bby-model-row .bby-input {
+  flex: 1;
+}
+
+.bby-icon-mini {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--bby-line-strong);
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-surface);
+  color: var(--bby-ink-soft);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.bby-icon-mini:hover {
+  color: var(--bby-accent);
+  border-color: var(--bby-accent);
+}
+
+.bby-icon-mini:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 温度/token/超时:三个短输入并排,label 在上、窄框在下 */
+.bby-channel-row {
+  display: flex;
+  gap: 10px;
+}
+
+.bby-mini-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--bby-ink-muted);
+}
+
+/* 开关行:左文案右复选框 */
+.bby-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.bby-checkbox {
+  /* flex 行里长文本会把固定宽高的复选框挤扁 → 禁止收缩,保持标准方形 */
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--bby-accent);
+  cursor: pointer;
+}
+
+.bby-channel-test {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--bby-ink-soft);
+  word-break: break-all;
+}
+
+.bby-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* 弹窗底部:spacer 把删除键推到最左,与右侧操作分隔 */
+.bby-modal-foot-spacer {
+  flex: 1 1 auto;
+}
+
+.bby-phrase-area {
+  min-height: 150px;
+  resize: vertical;
+}
+
+/* —— 轻提示 —— */
+.bby-toast {
+  position: fixed;
+  z-index: 10002;
+  left: 50%;
+  bottom: 28px;
+  max-width: calc(100vw - 32px);
+  padding: 9px 14px;
+  border: 1px solid var(--bby-line-strong);
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-surface);
+  color: var(--bby-ink);
+  box-shadow: var(--bby-shadow);
+  transform: translateX(-50%);
+  font-size: 12px;
+}
+
+.bby-mobile-grabber,
+.bby-mobile-nav {
+  display: none;
+}
+
+/* —— 进出场过渡 —— */
+.bby-fade-enter-active,
+.bby-fade-leave-active {
+  transition: opacity var(--bby-duration) var(--bby-ease);
+}
+
+.bby-fade-enter-from,
+.bby-fade-leave-to {
+  opacity: 0;
+}
+
+/* 窗口进出场:由遮罩 Transition 的 class 作后代选择器驱动(窗口自身不套 Transition——
+   父子 v-if 同时翻转时子 Transition 的 leave 不触发,窗口会无动画直接被移除)。 */
+.bby-fade-enter-from .bby-window,
+.bby-fade-leave-to .bby-window {
+  opacity: 0;
+  transform: translateY(16px) scale(0.985);
+}
+
+.bby-page-enter-active,
+.bby-page-leave-active,
+.bby-expand-enter-active,
+.bby-expand-leave-active,
+.bby-action-enter-active,
+.bby-action-leave-active {
+  transition:
+    opacity 0.16s var(--bby-ease),
+    transform 0.16s var(--bby-ease);
+}
+
+.bby-page-enter-from {
+  opacity: 0;
+  transform: translateY(7px);
+}
+
+.bby-page-leave-to {
+  opacity: 0;
+  transform: translateY(-7px);
+}
+
+/* 内联编辑区/候选稿的出现:轻微上浮淡入 */
+.bby-expand-enter-from,
+.bby-expand-leave-to {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
+.bby-action-enter-from,
+.bby-action-leave-to {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
+/* 弹窗进出场:比窗口更快更利落,~0.15s。遮罩是过渡根,卡片靠后代选择器联动。 */
+.bby-modal-enter-active,
+.bby-modal-leave-active {
+  transition: opacity 0.15s var(--bby-ease);
+}
+
+.bby-modal-enter-active .bby-modal,
+.bby-modal-leave-active .bby-modal {
+  transition:
+    opacity 0.15s var(--bby-ease),
+    transform 0.15s var(--bby-ease);
+}
+
+.bby-modal-enter-from,
+.bby-modal-leave-to {
+  opacity: 0;
+}
+
+.bby-modal-enter-from .bby-modal,
+.bby-modal-leave-to .bby-modal {
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+}
+
+.bby-toast-enter-active,
+.bby-toast-leave-active {
+  transition:
+    opacity 0.15s var(--bby-ease),
+    transform 0.15s var(--bby-ease);
+}
+
+.bby-toast-enter-from,
+.bby-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 8px);
+}
+
+/* 焦点指示:输入类控件靠 .bby-input:focus 的边框变色表达(与柏宝书一致),
+   outline 只留给按钮(键盘导航用),避免输入框出现 outline+边框的双层圈。 */
+.bby-root button:focus-visible {
+  outline: 2px solid var(--bby-accent);
+  outline-offset: 1px;
+}
+
+/* —— 隐藏滚动条(保留滚动能力):整个 UI 内统一 —— */
+.bby-root * {
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* 旧 Edge/IE */
+}
+
+.bby-root *::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+  /* Chrome/Safari */
+}
+
+/* ============ 响应式:移动端整屏(底部抽屉式) ============ */
+@media (max-width: 640px) {
+  .bby-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .bby-window {
+    max-width: 100%;
+    width: 100%;
+    /* 直接用视口高,不依赖父级百分比链 */
+    height: 96vh;
+    height: 96dvh;
+    max-height: 96vh;
+    max-height: 96dvh;
+    border: 0;
+    /* 仅顶部圆角:贴底的抽屉观感 */
+    border-radius: 18px 18px 0 0;
+  }
+
+  .bby-mobile-grabber {
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .bby-mobile-grabber span {
+    width: 40px;
+    height: 4px;
+    border-radius: var(--bby-radius-pill);
+    background: var(--bby-line-strong);
+  }
+
+  .bby-header {
+    padding: 4px 16px 12px;
+  }
+
+  .bby-main-nav {
+    display: none;
+  }
+
+  .bby-doc-bar {
+    padding: 8px 12px;
+  }
+
+  .bby-floor-meta > span:last-child {
+    display: none;
+  }
+
+  .bby-document {
+    padding: 4px 14px 20px;
+  }
+
+  .bby-general-editor {
+    margin-top: 4px;
+    padding: 11px;
+  }
+
+  .bby-context-control {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .bby-para {
+    padding: 12px 8px 12px 10px;
+  }
+
+  .bby-para-text {
+    font-size: 13px;
+  }
+
+  .bby-action-bar {
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  /* 窄屏省版面:渠道标签藏起,下拉占满剩余宽度,主按钮不换行 */
+  .bby-channel-select {
+    flex: 1 1 auto;
+  }
+
+  .bby-channel-select > span {
+    display: none;
+  }
+
+  .bby-channel-select .bby-input {
+    width: 100%;
+  }
+
+  .bby-decide {
+    width: 100%;
+  }
+
+  .bby-decide button {
+    flex: 1;
+  }
+
+  .bby-review-row {
+    gap: 8px;
+    padding: 10px 0;
+  }
+
+  .bby-review-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bby-settings {
+    padding: 20px 14px 28px;
+  }
+
+  /* 移动端:设置页正文整体收一号,与窄屏标题节奏统一(与柏宝书同规则) */
+  .bby-settings-page-head h2 {
+    font-size: 16px;
+  }
+
+  .bby-field-label,
+  .bby-channel-name {
+    font-size: 13px;
+  }
+
+  .bby-phrase-list strong {
+    font-size: 12px;
+  }
+
+  .bby-field-hint,
+  .bby-channel-model {
+    font-size: 11px;
+  }
+
+  .bby-seg {
+    font-size: 12px;
+  }
+
+  /* 测试按钮文字:窄屏显短版「测试」,藏完整版「测试渠道」 */
+  .bby-btn-label-full {
+    display: none;
+  }
+
+  .bby-btn-label-short {
+    display: inline;
+  }
+
+  .bby-mobile-nav {
+    flex: 0 0 auto;
+    display: flex;
+    border-top: 1px solid var(--bby-line);
+    background: var(--bby-surface);
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
+  }
+
+  .bby-mobile-nav button {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px;
+    border: 0;
+    background: transparent;
+    color: var(--bby-ink-muted);
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .bby-mobile-nav button.is-active {
+    color: var(--bby-accent);
+  }
+
+  /* 抽屉从底部滑入 / 滑回底部(纯位移,不淡透明) */
+  .bby-fade-enter-from .bby-window,
+  .bby-fade-leave-to .bby-window {
+    opacity: 1;
+    transform: translateY(100%);
+  }
+}

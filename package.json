@@ -1,0 +1,26 @@
+{
+  "name": "st-baibai-yan",
+  "version": "0.1.12",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync-version": "node scripts/sync-version.mjs",
+    "prebuild": "node scripts/sync-version.mjs",
+    "build": "vite build --configLoader runner",
+    "prewatch": "node scripts/sync-version.mjs",
+    "test": "vitest run",
+    "watch": "vite build --watch --mode development --configLoader runner",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "jsonrepair": "^3.15.0",
+    "vue": "^3.5.35"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.7",
+    "typescript": "^5.7.0",
+    "vite": "^7.3.3",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^3.3.3"
+  }
+}

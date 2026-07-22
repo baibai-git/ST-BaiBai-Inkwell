@@ -34,6 +34,18 @@ export interface RewriteStoryContext {
   historyMessageCount: number;
 }
 
+export interface RewriteStoryContextOptions {
+  includeWorldInfo: boolean;
+  includeCharacterDescription: boolean;
+  includeUserDescription: boolean;
+}
+
+const DEFAULT_REWRITE_STORY_CONTEXT_OPTIONS: RewriteStoryContextOptions = {
+  includeWorldInfo: true,
+  includeCharacterDescription: true,
+  includeUserDescription: true,
+};
+
 export function cleanStoryContextText(message: string): string {
   let text = String(message ?? '')
     .replace(THINK_BLOCK, '')
@@ -310,6 +322,7 @@ export async function collectRewriteStoryContext(
   floor: number,
   currentText: string,
   contextRounds: number,
+  options: RewriteStoryContextOptions = DEFAULT_REWRITE_STORY_CONTEXT_OPTIONS,
 ): Promise<RewriteStoryContext> {
   const context = getContext();
   if (!context) throw new Error('SillyTavern 上下文不可用');
@@ -331,13 +344,15 @@ export async function collectRewriteStoryContext(
     `${context.name2 || 'Char'}: ${cleanStoryContextText(currentText)}`,
   ].filter(Boolean);
 
-  const [worldInfo] = await Promise.all([fetchWorldInfo(scanText, floor)]);
+  const worldInfo = options.includeWorldInfo
+    ? await fetchWorldInfo(scanText, floor)
+    : '';
   return {
     historyReference: history.historyReference,
     latestUserMessage: history.latestUserMessage,
     worldInfo,
-    charCard: fetchCharCard(),
-    persona: fetchUserPersona(),
+    charCard: options.includeCharacterDescription ? fetchCharCard() : '',
+    persona: options.includeUserDescription ? fetchUserPersona() : '',
     historyMessageCount: history.messageCount,
   };
 }

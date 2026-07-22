@@ -185,7 +185,7 @@
   white-space: nowrap;
 }
 
-.bby-floor-meta > span:last-child {
+.bby-floor-meta>span:last-child {
   color: var(--bby-ink-muted);
   font-size: 12px;
 }
@@ -407,7 +407,7 @@
   color: var(--bby-ink-muted);
 }
 
-.bby-rule-open > .bby-icon {
+.bby-rule-open>.bby-icon {
   color: var(--bby-ink-muted);
 }
 
@@ -452,7 +452,7 @@
 
 /* flex column 子项默认可收缩,而折叠区/段落纸都带 overflow:hidden,最小高度会被压到近 0
    (表现为折叠区变白条、正文被压短且不滚动)。锁死不收缩,各自保持自然高,超出交给容器滚动。 */
-.bby-document > * {
+.bby-document>* {
   flex: 0 0 auto;
 }
 
@@ -470,7 +470,7 @@
   margin: 6px 0 10px;
 }
 
-.bby-work-fold + .bby-work-fold {
+.bby-work-fold+.bby-work-fold {
   margin-top: 0;
 }
 
@@ -504,28 +504,30 @@
   line-height: 1.65;
 }
 
-.bby-context-control {
+/* 携带选项行:左文案右控件,行内紧凑排列 */
+.bby-carry-options {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.bby-context-control label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--bby-ink-soft);
+.bby-carry-row {
+  padding: 3px 0;
   font-size: 12px;
+  color: var(--bby-ink-soft);
 }
 
-.bby-context-control input {
-  width: 68px;
+/* 轮数小输入框:类序在 .bby-input 之前,用更高优先级压掉它的 width:100% */
+.bby-carry-row .bby-rounds-input {
+  flex: 0 0 auto;
+  width: 44px;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: left;
 }
 
-.bby-context-control > span {
-  color: var(--bby-ink-muted);
-  font-size: 11px;
+.bby-carry-row span {
+  white-space: nowrap;
 }
 
 /* 段落:纯留白分段,不用横线;左缘色条表达状态(强调=已标注/展开中) */
@@ -1181,7 +1183,7 @@
   gap: 12px;
 }
 
-.bby-review-columns > div {
+.bby-review-columns>div {
   min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--bby-line);
@@ -1295,7 +1297,7 @@
 }
 
 /* 多个设置区同时展开时保持各自自然高度，超出部分由父容器滚动。 */
-.bby-settings-sections > * {
+.bby-settings-sections>* {
   flex: 0 0 auto;
 }
 
@@ -1399,7 +1401,7 @@
   white-space: nowrap;
 }
 
-.bby-phrase-list > button {
+.bby-phrase-list>button {
   width: 100%;
   display: flex;
   align-items: center;
@@ -1418,16 +1420,16 @@
     transform 0.15s var(--bby-ease);
 }
 
-.bby-phrase-list > button:hover {
+.bby-phrase-list>button:hover {
   border-color: var(--bby-accent);
   background: var(--bby-surface);
 }
 
-.bby-phrase-list > button:active {
+.bby-phrase-list>button:active {
   transform: scale(0.995);
 }
 
-.bby-phrase-list button > span:nth-child(2) {
+.bby-phrase-list button>span:nth-child(2) {
   min-width: 0;
   flex: 1 1 auto;
   display: flex;
@@ -1563,7 +1565,7 @@
 }
 
 /* 列表是滚动区首个元素时,顶部留白由滚动区内边距负责,去掉多余的上外边距 */
-.bby-floor-scroll > .bby-floor-list:first-child {
+.bby-floor-scroll>.bby-floor-list:first-child {
   margin-top: 0;
 }
 
@@ -1585,7 +1587,7 @@
 }
 
 /* 相邻楼层之间用细分割线,而非卡片堆叠 —— 列表更整洁,像目录 */
-.bby-floor-open + .bby-floor-open {
+.bby-floor-open+.bby-floor-open {
   border-top: 1px solid var(--bby-line);
 }
 
@@ -2060,7 +2062,7 @@
   flex-direction: column;
 }
 
-.bby-page-stage > .bby-page-shell {
+.bby-page-stage>.bby-page-shell {
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -2211,14 +2213,8 @@
     align-items: stretch;
   }
 
-  .bby-context-control {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 6px;
-  }
-
   .bby-para {
-    padding: 10px 14px;
+    padding: 8px 14px;
   }
 
   .bby-para-text {
@@ -2306,12 +2302,15 @@
     display: inline;
   }
 
+  /* 底部导航:仅图标、等分、大触达区(对齐柏宝书 NavBar 的底部形态) */
   .bby-mobile-nav {
     flex: 0 0 auto;
     display: flex;
+    justify-content: space-around;
+    padding: 6px 6px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
     border-top: 1px solid var(--bby-line);
     background: var(--bby-surface);
-    padding-bottom: max(4px, env(safe-area-inset-bottom));
   }
 
   .bby-mobile-nav button {
@@ -2319,13 +2318,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    padding: 9px;
+    padding: 10px 0;
     border: 0;
     background: transparent;
     color: var(--bby-ink-muted);
     cursor: pointer;
-    font-size: 12px;
+    font-size: 22px;
+    transition: color var(--bby-duration) var(--bby-ease);
   }
 
   .bby-mobile-nav button.is-active {

@@ -22,6 +22,9 @@ export interface RewriteRequest {
   annotations: ParagraphAnnotation[];
   generalInstructions: string[];
   contextRounds: number;
+  includeWorldInfo: boolean;
+  includeCharacterDescription: boolean;
+  includeUserDescription: boolean;
   channel: ApiChannel | null;
   signal?: AbortSignal;
 }
@@ -148,6 +151,11 @@ export async function rewriteCurrentFloor(request: RewriteRequest): Promise<Rewr
     request.floor,
     request.originalText,
     request.contextRounds,
+    {
+      includeWorldInfo: request.includeWorldInfo,
+      includeCharacterDescription: request.includeCharacterDescription,
+      includeUserDescription: request.includeUserDescription,
+    },
   );
   const messages: ChatMessage[] = [];
   // 破限:置顶 system,降低拒答率(与柏宝书一致)

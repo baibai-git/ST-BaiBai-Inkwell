@@ -38,6 +38,9 @@ import { computed, nextTick, ref, watch } from 'vue';
 const expandedId = ref<number | null>(null);
 const selectedChannelId = ref('');
 const contextRounds = ref(1);
+const carryWorldbook = ref(true);
+const carryCharDesc = ref(true);
+const carryUserDesc = ref(true);
 const generalNote = ref('');
 const globalPhraseIds = ref<number[]>([]);
 const customNote = ref('');
@@ -412,6 +415,9 @@ async function startReview(): Promise<void> {
       floor: ui.floor,
       originalText: ui.originalText,
       contextRounds: contextRounds.value,
+      includeWorldInfo: carryWorldbook.value,
+      includeCharacterDescription: carryCharDesc.value,
+      includeUserDescription: carryUserDesc.value,
       channel: selectedChannelId.value
         ? channels.find(channel => channel.id === selectedChannelId.value) ?? null
         : null,
@@ -859,12 +865,23 @@ function onOverlayClick(event: MouseEvent): void {
                       class="bby-input bby-general-note"
                       placeholder="可选：填写作用于当前楼层全文的要求"
                     ></textarea>
-                    <div class="bby-context-control">
-                      <label>
+                    <div class="bby-carry-options">
+                      <label class="bby-switch-row bby-carry-row">
                         <span>携带上下文轮数</span>
-                        <input v-model.number="contextRounds" class="bby-input" type="number" min="0" max="10" step="1" />
+                        <input v-model.number="contextRounds" class="bby-input bby-rounds-input" type="number" min="0" max="10" step="1" />
                       </label>
-                      <span>一轮为上一条 AI 消息及其后的用户输入</span>
+                      <label class="bby-switch-row bby-carry-row">
+                        <span>携带世界书</span>
+                        <input v-model="carryWorldbook" type="checkbox" class="bby-checkbox" />
+                      </label>
+                      <label class="bby-switch-row bby-carry-row">
+                        <span>携带角色描述</span>
+                        <input v-model="carryCharDesc" type="checkbox" class="bby-checkbox" />
+                      </label>
+                      <label class="bby-switch-row bby-carry-row">
+                        <span>携带User描述</span>
+                        <input v-model="carryUserDesc" type="checkbox" class="bby-checkbox" />
+                      </label>
                     </div>
                   </section>
                 </Collapsible>
@@ -1304,14 +1321,14 @@ function onOverlayClick(event: MouseEvent): void {
           </div>
 
           <nav class="bby-mobile-nav" aria-label="移动端导航">
-            <button :class="{ 'is-active': ui.page === 'floors' }" type="button" @click="ui.page = 'floors'">
-              <Icon name="list" /><span>楼层</span>
+            <button :class="{ 'is-active': ui.page === 'floors' }" type="button" title="楼层" aria-label="楼层" @click="ui.page = 'floors'">
+              <Icon name="list" />
             </button>
-            <button :class="{ 'is-active': ui.page === 'workspace' }" type="button" :disabled="ui.floor == null" @click="goToWorkspace">
-              <Icon name="workspace" /><span>工作台</span>
+            <button :class="{ 'is-active': ui.page === 'workspace' }" type="button" :disabled="ui.floor == null" title="工作台" aria-label="工作台" @click="goToWorkspace">
+              <Icon name="workspace" />
             </button>
-            <button :class="{ 'is-active': ui.page === 'settings' }" type="button" @click="ui.page = 'settings'">
-              <Icon name="settings" /><span>设置</span>
+            <button :class="{ 'is-active': ui.page === 'settings' }" type="button" title="设置" aria-label="设置" @click="ui.page = 'settings'">
+              <Icon name="settings" />
             </button>
           </nav>
         </section>

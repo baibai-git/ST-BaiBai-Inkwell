@@ -1,11 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cleanStoryContextText,
+  collectRewriteStoryContext,
   selectHistoryIndices,
   serializeRewriteHistory,
 } from '@/api/storyContext';
-import type { STMessage } from '@/st/context';
+import type { STContext, STMessage } from '@/st/context';
+
+const contextMocks = vi.hoisted(() => ({
+  getCheckWorldInfo: vi.fn(),
+  getContext: vi.fn(),
+  getEjsTemplate: vi.fn(),
+}));
+
+vi.mock('@/st/context', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/st/context')>();
+  return {
+    ...actual,
+    ...contextMocks,
+  };
+});
 
 function message(mes: string, options: Partial<STMessage> = {}): STMessage {
   return {
@@ -80,5 +95,67 @@ describe('story history serialization', () => {
     expect(history.historyReference).toContain('[楼层 #2｜Char]\nAI 二');
     expect(history.latestUserMessage).toBe('用户二');
     expect(history.messageCount).toBe(4);
+  });
+});
+
+describe('optional story context', () => {
+  const substituteParams = vi.fn((content: string) =>
+    content === '{{persona}}' ? 'User persona' : `expanded:${content}`,
+  );
+  const checkWorldInfo = vi.fn(async () => ({
+    allActivatedEntries: new Set([{ content: 'world entry' }]),
+  }));
+  const context: STContext = {
+    chat: [message('current floor')],
+    name1: 'User',
+    name2: 'Char',
+    characters: [
+      {
+        name: 'Char',
+        avatar: 'char.png',
+        description: 'description',
+        personality: 'personality',
+        scenario: 'scenario',
+      },
+    ],
+    characterId: 0,
+    getRequestHeaders: () => ({}),
+    substituteParams,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    contextMocks.getContext.mockReturnValue(context);
+    contextMocks.getCheckWorldInfo.mockResolvedValue(checkWorldInfo);
+    contextMocks.getEjsTemplate.mockReturnValue(null);
+  });
+
+  it('skips disabled world info, character description, and User information', async () => {
+    const result = await collectRewriteStoryContext(0, 'current floor', 0, {
+      includeWorldInfo: false,
+      includeCharacterDescription: false,
+      includeUserDescription: false,
+    });
+
+    expect(result.worldInfo).toBe('');
+    expect(result.charCard).toBe('');
+    expect(result.persona).toBe('');
+    expect(contextMocks.getCheckWorldInfo).not.toHaveBeenCalled();
+    expect(substituteParams).not.toHaveBeenCalled();
+  });
+
+  it('collects all three optional context parts when enabled', async () => {
+    const result = await collectRewriteStoryContext(0, 'current floor', 0, {
+      includeWorldInfo: true,
+      includeCharacterDescription: true,
+      includeUserDescription: true,
+    });
+
+    expect(result.worldInfo).toBe('expanded:world entry');
+    expect(result.charCard).toContain('expanded:description');
+    expect(result.charCard).toContain('expanded:personality');
+    expect(result.charCard).toContain('expanded:scenario');
+    expect(result.persona).toBe('User persona');
+    expect(contextMocks.getCheckWorldInfo).toHaveBeenCalledOnce();
   });
 });

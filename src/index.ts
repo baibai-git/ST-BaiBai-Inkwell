@@ -3,6 +3,7 @@ import { initializePenSettings } from '@/api/settings';
 import { initializeSharedChannels } from '@/api/sharedChannels';
 import { bindEditButtons } from '@/editButton';
 import { injectMenuButton } from '@/menu';
+import { guardEditableArrowKeys } from '@/st/keyboard';
 import { versionedAssetUrl } from '@/version';
 import '@/styles/base.css';
 import '@/styles/theme.css';
@@ -21,6 +22,7 @@ function mount(): void {
   host.style.setProperty('display', 'contents', 'important');
   const shadow = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
   shadow.textContent = '';
+  guardEditableArrowKeys(shadow);
 
   const link = document.createElement('link');
   link.rel = 'stylesheet';

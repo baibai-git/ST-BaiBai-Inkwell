@@ -238,6 +238,9 @@ export async function fetchModels(
       throw new ApiError(`拉取模型失败 (${response.status})：${text.slice(0, 200)}`);
     }
     const data = await response.json();
+    if (data?.error && !Array.isArray(data?.data)) {
+      throw new ApiError(data?.message || '拉取模型失败');
+    }
     const list: unknown = data?.data ?? data?.models ?? [];
     if (!Array.isArray(list)) return [];
     return list

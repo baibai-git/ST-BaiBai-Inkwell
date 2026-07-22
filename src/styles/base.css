@@ -1941,6 +1941,78 @@
   flex: 1;
 }
 
+/* 模型可搜索下拉：输入框保留手填能力，拉取到列表后显示自绘菜单。 */
+.bby-combo {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.bby-combo .bby-input {
+  width: 100%;
+  padding-right: 26px;
+}
+
+.bby-combo-caret {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9.5 12 15.5 18 9.5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 14px;
+  transition: transform 0.15s ease;
+}
+
+.bby-combo-caret.is-open {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.bby-combo-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 6;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--bby-line-strong);
+  border-radius: var(--bby-radius-sm);
+  background: var(--bby-surface);
+  box-shadow: var(--bby-shadow);
+}
+
+.bby-combo-item {
+  padding: 7px 9px;
+  border-radius: var(--bby-radius-sm);
+  color: var(--bby-ink);
+  cursor: pointer;
+  font-size: 12.5px;
+  word-break: break-all;
+}
+
+.bby-combo-item:hover {
+  background: var(--bby-surface-2);
+}
+
+.bby-combo-item.is-active {
+  color: var(--bby-accent);
+  font-weight: 600;
+}
+
+.bby-combo-empty {
+  padding: 7px 9px;
+  color: var(--bby-ink-muted);
+  font-size: 12px;
+}
+
 .bby-icon-mini {
   flex: 0 0 auto;
   display: inline-flex;

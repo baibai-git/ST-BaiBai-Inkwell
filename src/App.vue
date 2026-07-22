@@ -86,6 +86,9 @@ const channelDraft = ref<ApiChannel | null>(null);
 const phraseDraft = ref<QuickPhrase | null>(null);
 const testMessage = ref('');
 const modelOptions = ref<string[]>([]);
+const loadingModels = ref(false);
+const modelMenuOpen = ref(false);
+const modelQuery = ref('');
 const toastText = ref('');
 const markedPhrases = ref<Record<number, number[]>>({});
 const paragraphNotes = ref<Record<number, string>>({});
@@ -831,6 +834,32 @@ const excludeParamsText = computed<string>({
   },
 });
 
+const filteredModelOptions = computed<string[]>(() => {
+  const query = modelQuery.value.trim().toLowerCase();
+  const options = query
+    ? modelOptions.value.filter(model => model.toLowerCase().includes(query))
+    : modelOptions.value;
+  return options.slice(0, 200);
+});
+
+function openModelMenu(): void {
+  modelQuery.value = '';
+  modelMenuOpen.value = true;
+}
+
+function pickModel(model: string): void {
+  if (channelDraft.value) channelDraft.value.model = model;
+  modelMenuOpen.value = false;
+  modelQuery.value = '';
+}
+
+function closeModelMenuSoon(): void {
+  window.setTimeout(() => {
+    modelMenuOpen.value = false;
+    modelQuery.value = '';
+  }, 150);
+}
+
 function openChannel(channel?: ApiChannel): void {
   if (!sharingState.ready) {
     showToast('渠道正在载入');
@@ -842,6 +871,9 @@ function openChannel(channel?: ApiChannel): void {
   }
   testMessage.value = '';
   modelOptions.value = [];
+  loadingModels.value = false;
+  modelMenuOpen.value = false;
+  modelQuery.value = '';
   showKey.value = false;
   channelDraft.value = channel
     ? JSON.parse(JSON.stringify(channel))
@@ -878,7 +910,8 @@ async function testChannel(): Promise<void> {
 }
 
 async function loadModels(): Promise<void> {
-  if (!channelDraft.value) return;
+  if (!channelDraft.value || loadingModels.value) return;
+  loadingModels.value = true;
   testMessage.value = '正在拉取模型…';
   try {
     modelOptions.value = await fetchModels(channelDraft.value);
@@ -890,6 +923,8 @@ async function loadModels(): Promise<void> {
       : '接口没有返回可用模型';
   } catch (error) {
     testMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    loadingModels.value = false;
   }
 }
 
@@ -1697,11 +1732,43 @@ function onOverlayClick(event: MouseEvent): void {
         <label class="bby-modal-field">
           <span class="bby-modal-label">模型</span>
           <div class="bby-model-row">
-            <input v-model="channelDraft.model" list="bby-channel-model-options" class="bby-input" placeholder="模型名" />
-            <datalist id="bby-channel-model-options">
-              <option v-for="model in modelOptions" :key="model" :value="model"></option>
-            </datalist>
-            <button class="bby-icon-mini" type="button" title="拉取模型" @click="loadModels"><Icon name="refresh" /></button>
+            <div class="bby-combo">
+              <input
+                v-model="channelDraft.model"
+                class="bby-input"
+                :placeholder="modelOptions.length ? '搜索或输入模型名…' : '模型名，如 gpt-4o-mini'"
+                @focus="openModelMenu"
+                @input="modelQuery = channelDraft.model; modelMenuOpen = true"
+                @blur="closeModelMenuSoon"
+              />
+              <span
+                v-if="modelOptions.length"
+                class="bby-combo-caret"
+                :class="{ 'is-open': modelMenuOpen }"
+                aria-hidden="true"
+              />
+              <ul v-if="modelMenuOpen && modelOptions.length" class="bby-combo-menu">
+                <li v-if="!filteredModelOptions.length" class="bby-combo-empty">无匹配模型</li>
+                <li
+                  v-for="model in filteredModelOptions"
+                  :key="model"
+                  class="bby-combo-item"
+                  :class="{ 'is-active': model === channelDraft.model }"
+                  @mousedown.prevent="pickModel(model)"
+                >
+                  {{ model }}
+                </li>
+              </ul>
+            </div>
+            <button
+              class="bby-icon-mini"
+              type="button"
+              :title="loadingModels ? '拉取中…' : '拉取模型'"
+              :disabled="loadingModels"
+              @click="loadModels"
+            >
+              <Icon name="refresh" :class="{ 'bby-spin': loadingModels }" />
+            </button>
           </div>
         </label>
         <div class="bby-channel-row">

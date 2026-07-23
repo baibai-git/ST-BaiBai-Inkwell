@@ -80,7 +80,6 @@ const carryCharDesc = ref(true);
 const carryUserDesc = ref(true);
 const generalNote = ref('');
 const globalPhraseIds = ref<number[]>([]);
-const customNote = ref('');
 const showKey = ref(false);
 const channelDraft = ref<ApiChannel | null>(null);
 const phraseDraft = ref<QuickPhrase | null>(null);
@@ -94,6 +93,13 @@ const markedPhrases = ref<Record<number, number[]>>({});
 const paragraphNotes = ref<Record<number, string>>({});
 const rewriteChanges = ref<RewriteChange[]>([]);
 const reviewDecision = ref<Record<number, 'accept' | 'reject'>>({});
+/* 审阅页内联手改:键是段落号,值是用户改过的结果文本(与 AI 版不同才登记) */
+const editedResults = ref<Record<number, string>>({});
+const editingResultId = ref<number | null>(null);
+const resultDraft = ref('');
+/* 工作台模式:标注=给 AI 下指令;编辑=不走 AI,直接手动改文 */
+const workMode = ref<'annotate' | 'edit'>('annotate');
+const editDrafts = ref<string[]>([]);
 const generationError = ref('');
 const saving = ref(false);
 const replacing = ref(false);
@@ -167,11 +173,15 @@ watch(
     markedPhrases.value = {};
     paragraphNotes.value = {};
     expandedId.value = null;
-    customNote.value = '';
     generalNote.value = '';
     globalPhraseIds.value = [];
     rewriteChanges.value = [];
     reviewDecision.value = {};
+    editedResults.value = {};
+    editingResultId.value = null;
+    resultDraft.value = '';
+    workMode.value = 'annotate';
+    editDrafts.value = [];
     generationError.value = '';
     contextSummary.value = '';
     contextRounds.value = penSettings.defaultContextRounds;
@@ -256,19 +266,21 @@ function markedNames(id: number): string[] {
 
 function toggleExpand(id: number): void {
   if (ui.stage !== 'annotate' || viewingGenerationTarget.value) return;
-  saveNote();
   if (expandedId.value === id) {
     expandedId.value = null;
     return;
   }
   expandedId.value = id;
-  customNote.value = paragraphNotes.value[id] ?? '';
 }
 
-function saveNote(): void {
-  if (expandedId.value == null) return;
-  paragraphNotes.value[expandedId.value] = customNote.value;
-}
+/* 段落补充要求直连 paragraphNotes:输入即生效,hasInstructions 实时为真,
+   不会在「生成」按钮的禁用态下吞掉第一次点击 */
+const noteDraft = computed<string>({
+  get: () => (expandedId.value == null ? '' : paragraphNotes.value[expandedId.value] ?? ''),
+  set: value => {
+    if (expandedId.value != null) paragraphNotes.value[expandedId.value] = value;
+  },
+});
 
 function captureWorkspaceDraft(): WorkspaceDraftSnapshot {
   return {
@@ -303,7 +315,6 @@ function restoreWorkspaceDraft(draft: WorkspaceDraftSnapshot): void {
   );
   paragraphNotes.value = { ...draft.paragraphNotes };
   expandedId.value = null;
-  customNote.value = '';
 }
 
 function formatContextSummary(result: RewriteResult): string {
@@ -318,7 +329,6 @@ function formatContextSummary(result: RewriteResult): string {
 function clearMark(id: number): void {
   markedPhrases.value[id] = [];
   paragraphNotes.value[id] = '';
-  if (expandedId.value === id) customNote.value = '';
 }
 
 function phraseInstruction(id: number): string {
@@ -672,7 +682,6 @@ onUnmounted(() => {
 
 async function startReview(): Promise<void> {
   if (generationTask.value || saving.value || replacing.value) return;
-  saveNote();
   if (!hasInstructions.value) {
     showToast('请先添加行标注或整体要求');
     return;
@@ -777,6 +786,163 @@ function backToAnnotate(): void {
   ui.stage = 'annotate';
 }
 
+/* 离开标注页就退回标注模式,手改草稿随之丢弃(草稿只活在标注页里) */
+watch(
+  () => ui.stage,
+  stage => {
+    if (stage !== 'annotate') workMode.value = 'annotate';
+  },
+);
+
+/* textarea 随内容自动增高;v-model 更新值后 updated 钩子会再量一次 */
+function growTextarea(el: HTMLTextAreaElement): void {
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+}
+
+const vAutogrow = {
+  mounted: (el: HTMLTextAreaElement) => growTextarea(el),
+  updated: (el: HTMLTextAreaElement) => growTextarea(el),
+};
+
+function setWorkMode(mode: 'annotate' | 'edit'): void {
+  if (mode === workMode.value) return;
+  if (mode === 'edit') {
+    expandedId.value = null;
+    editDrafts.value = ui.paragraphs.map(paragraph => paragraph.text);
+  }
+  workMode.value = mode;
+}
+
+function discardManualEdit(): void {
+  workMode.value = 'annotate';
+  editDrafts.value = [];
+}
+
+const editDirty = computed(() =>
+  ui.paragraphs.some(
+    (paragraph, index) => (editDrafts.value[index] ?? paragraph.text).trim() !== paragraph.text,
+  ),
+);
+
+/* 手动保存:只把改过的段落交给 applyParagraphReplacements,未动行的空白/缩进原样保留;
+   段落清空即删除该行(与审阅页接受「删除行」同一语义) */
+async function saveManualEdit(): Promise<void> {
+  if (saving.value || replacing.value || generating.value || viewingGenerationTarget.value) return;
+  if (ui.floor == null) {
+    showToast('当前楼层不可用');
+    return;
+  }
+  const replacements = new Map<number, string>();
+  ui.paragraphs.forEach((paragraph, index) => {
+    const draft = (editDrafts.value[index] ?? paragraph.text).trim();
+    if (draft !== paragraph.text) replacements.set(paragraph.id, draft);
+  });
+  if (!replacements.size) {
+    showToast('内容没有变化');
+    return;
+  }
+  const nextText = applyParagraphReplacements(ui.originalText, replacements);
+  if (!nextText.trim()) {
+    showToast('不能把楼层保存为空');
+    return;
+  }
+
+  const floor = ui.floor;
+  const originalText = ui.originalText;
+  const chatId = ui.chatId;
+  const hadMarks = hasInstructions.value;
+  saving.value = true;
+  try {
+    const result = await applyFloorText(floor, originalText, nextText, chatId);
+    if (result === 'chat-changed') {
+      showToast('当前聊天已经切换，不能保存修改');
+      return;
+    }
+    if (result === 'floor-changed') {
+      showToast('楼层内容已经变化，请重新打开砚');
+      return;
+    }
+    if (result !== 'saved') {
+      showToast('无法保存当前楼层');
+      return;
+    }
+    // 重开楼层让段落与最新内容对齐;行号可能已变,原有标注由会话重置一并清掉
+    if (ui.floor === floor && ui.chatId === chatId) {
+      openFloorInPen(floor);
+    }
+    showToast(hadMarks ? '修改已保存，原有标注已随行号变化重置' : '修改已保存到楼层');
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '保存楼层失败');
+  } finally {
+    saving.value = false;
+  }
+}
+
+/* —— 审阅页内联手改 AI 结果 —— */
+function rowEditedResult(row: ReviewRow): string | null {
+  if (row.deleted || row.paragraphs.length !== 1) return null;
+  return editedResults.value[row.paragraphs[0] ?? -1] ?? null;
+}
+
+function displayRowResult(row: ReviewRow): string {
+  return rowEditedResult(row) ?? row.result;
+}
+
+function isEditingRow(row: ReviewRow): boolean {
+  return (
+    !row.deleted &&
+    row.paragraphs.length === 1 &&
+    editingResultId.value === row.paragraphs[0]
+  );
+}
+
+function startResultEdit(row: ReviewRow): void {
+  if (row.deleted || row.paragraphs.length !== 1) return;
+  const paragraph = row.paragraphs[0] ?? -1;
+  editingResultId.value = paragraph;
+  resultDraft.value = editedResults.value[paragraph] ?? row.result;
+}
+
+function finishResultEdit(): void {
+  const paragraph = editingResultId.value;
+  if (paragraph == null) return;
+  editingResultId.value = null;
+  const change = rewriteChanges.value.find(item => item.paragraph === paragraph);
+  if (!change) return;
+  const draft = resultDraft.value.trim();
+  if (draft === change.replacement) {
+    delete editedResults.value[paragraph];
+    return;
+  }
+  editedResults.value[paragraph] = draft;
+  // 手改即采纳:用户动手改了,意图就是应用这条
+  reviewDecision.value[paragraph] = 'accept';
+}
+
+function revertResultEdit(row: ReviewRow): void {
+  if (row.paragraphs.length !== 1) return;
+  const paragraph = row.paragraphs[0] ?? -1;
+  delete editedResults.value[paragraph];
+  if (editingResultId.value === paragraph) resultDraft.value = row.result;
+}
+
+const editedAcceptedCount = computed(
+  () =>
+    rewriteChanges.value.filter(
+      change =>
+        reviewDecision.value[change.paragraph] === 'accept' &&
+        editedResults.value[change.paragraph] !== undefined,
+    ).length,
+);
+
+const applyButtonLabel = computed(() => {
+  if (saving.value) return '保存中…';
+  if (acceptedCount.value === 0) return '丢弃全部';
+  const base = `应用 ${acceptedCount.value} 行`;
+  return editedAcceptedCount.value > 0 ? `${base}（含 ${editedAcceptedCount.value} 处手改）` : base;
+});
+
 async function finishReview(): Promise<void> {
   if (generating.value || saving.value || replacing.value) return;
   if (ui.floor == null || !rewriteChanges.value.length) return;
@@ -788,7 +954,7 @@ async function finishReview(): Promise<void> {
   const accepted = new Map(
     rewriteChanges.value
       .filter(change => reviewDecision.value[change.paragraph] === 'accept')
-      .map(change => [change.paragraph, change.replacement] as const),
+      .map(change => [change.paragraph, editedResults.value[change.paragraph] ?? change.replacement] as const),
   );
   const nextText = applyParagraphReplacements(ui.originalText, accepted);
 
@@ -1174,8 +1340,31 @@ function onOverlayClick(event: MouseEvent): void {
           <Transition name="bby-page">
             <div v-if="ui.page === 'workspace'" key="workspace" class="bby-page-shell">
               <div v-if="ui.stage === 'annotate'" class="bby-work-tabs bby-status-strip">
-                <span class="bby-floor-number">{{ ui.floorLabel }}</span>
-                <span>已标注 <b>{{ markedCount }}</b> 行</span>
+                <span class="bby-strip-meta">
+                  <span class="bby-floor-number">{{ ui.floorLabel }}</span>
+                  <span v-if="workMode === 'annotate'">已标注 <b>{{ markedCount }}</b> 行</span>
+                  <span v-else>手动修改原文，不经过 AI</span>
+                </span>
+                <div class="bby-segmented bby-mode-switch" role="tablist" aria-label="工作台模式">
+                  <button
+                    type="button"
+                    class="bby-seg"
+                    :class="{ 'is-on': workMode === 'annotate' }"
+                    :disabled="generating || saving || replacing"
+                    @click="setWorkMode('annotate')"
+                  >
+                    标注
+                  </button>
+                  <button
+                    type="button"
+                    class="bby-seg"
+                    :class="{ 'is-on': workMode === 'edit' }"
+                    :disabled="generating || viewingGenerationTarget || saving || replacing"
+                    @click="setWorkMode('edit')"
+                  >
+                    <Icon name="pen" /> 编辑
+                  </button>
+                </div>
               </div>
 
               <div v-else class="bby-work-tabs bby-review-bar">
@@ -1192,7 +1381,7 @@ function onOverlayClick(event: MouseEvent): void {
               </div>
 
               <main v-if="ui.stage === 'annotate'" class="bby-document" aria-label="楼层全文">
-                <Collapsible title="整体要求" class="bby-work-fold">
+                <Collapsible v-if="workMode === 'annotate'" title="整体要求" class="bby-work-fold">
                   <template #badge>
                     <i v-if="generalFilled" class="bby-tab-dot"></i>
                   </template>
@@ -1324,14 +1513,24 @@ function onOverlayClick(event: MouseEvent): void {
 
                 <div class="bby-sheet">
                 <article
-                  v-for="paragraph in ui.paragraphs"
+                  v-for="(paragraph, index) in ui.paragraphs"
                   :key="paragraph.id"
                   class="bby-para"
                   :class="{
-                    'is-open': expandedId === paragraph.id,
-                    'is-marked': isMarked(paragraph.id),
+                    'is-open': workMode === 'annotate' && expandedId === paragraph.id,
+                    'is-marked': workMode === 'annotate' && isMarked(paragraph.id),
                   }"
                 >
+                  <textarea
+                    v-if="workMode === 'edit'"
+                    v-model="editDrafts[index]"
+                    v-autogrow
+                    class="bby-para-text bby-para-edit"
+                    rows="1"
+                    spellcheck="false"
+                    aria-label="手动编辑本行"
+                  ></textarea>
+                  <template v-else>
                   <button
                     class="bby-para-text"
                     type="button"
@@ -1361,16 +1560,16 @@ function onOverlayClick(event: MouseEvent): void {
                         @update:model-value="markedPhrases[paragraph.id] = $event"
                       />
                       <textarea
-                        v-model="customNote"
+                        v-model="noteDraft"
                         class="bby-input bby-note"
                         placeholder="填写希望如何修改这一行"
-                        @blur="saveNote"
                       ></textarea>
                       <button class="bby-text-action" type="button" @click="ui.page = 'settings'">
                         <Icon name="settings" /> 管理快捷语句
                       </button>
                     </div>
                   </Transition>
+                  </template>
                 </article>
                 </div>
 
@@ -1391,6 +1590,16 @@ function onOverlayClick(event: MouseEvent): void {
                     <span class="bby-tag">
                       {{ row.deleted ? row.paragraphs.length > 1 ? `删除 ${row.paragraphs.length} 行` : '删除行' : row.marked ? '标注行' : '关联调整' }}
                     </span>
+                    <span v-if="rowEditedResult(row) !== null" class="bby-tag bby-tag-edited">已手改</span>
+                    <button
+                      v-if="!row.deleted"
+                      class="bby-icon-mini bby-row-edit"
+                      type="button"
+                      title="手动修改这条结果"
+                      @click="startResultEdit(row)"
+                    >
+                      <Icon name="pen" />
+                    </button>
                   </div>
                   <div class="bby-review-columns">
                     <div>
@@ -1399,8 +1608,34 @@ function onOverlayClick(event: MouseEvent): void {
                     </div>
                     <div>
                       <span class="bby-review-label">改写结果</span>
-                      <p :class="{ 'bby-deleted-text': row.deleted }">
-                        {{ row.deleted ? row.paragraphs.length > 1 ? `（删除连续 ${row.paragraphs.length} 行）` : '（删除整行）' : row.result }}
+                      <template v-if="isEditingRow(row)">
+                        <textarea
+                          v-model="resultDraft"
+                          v-autogrow
+                          class="bby-input bby-result-edit"
+                          rows="1"
+                          spellcheck="false"
+                          aria-label="手动修改这条改写结果"
+                          @blur="finishResultEdit"
+                          @keydown.esc="finishResultEdit"
+                        ></textarea>
+                        <div class="bby-result-edit-actions">
+                          <button class="bby-text-action" type="button" @mousedown.prevent @click="finishResultEdit">
+                            <Icon name="check" /> 完成
+                          </button>
+                          <button
+                            v-if="rowEditedResult(row) !== null"
+                            class="bby-text-action"
+                            type="button"
+                            @mousedown.prevent
+                            @click="revertResultEdit(row)"
+                          >
+                            <Icon name="undo" /> 还原 AI 版
+                          </button>
+                        </div>
+                      </template>
+                      <p v-else :class="{ 'bby-deleted-text': row.deleted || displayRowResult(row) === '' }">
+                        {{ row.deleted ? row.paragraphs.length > 1 ? `（删除连续 ${row.paragraphs.length} 行）` : '（删除整行）' : displayRowResult(row) === '' ? '（清空整行）' : displayRowResult(row) }}
                       </p>
                     </div>
                   </div>
@@ -1424,7 +1659,7 @@ function onOverlayClick(event: MouseEvent): void {
               </main>
 
               <footer class="bby-action-bar">
-                <div ref="channelMenu" class="bby-channel-menu">
+                <div v-if="ui.stage === 'review' || workMode === 'annotate'" ref="channelMenu" class="bby-channel-menu">
                   <button
                     class="bby-channel-ghost"
                     type="button"
@@ -1454,27 +1689,43 @@ function onOverlayClick(event: MouseEvent): void {
                     </ul>
                   </Transition>
                 </div>
+                <span v-else></span>
                 <div class="bby-action-buttons">
                   <button v-if="generating" class="bby-button" type="button" @click="cancelGeneration">
                     {{ viewingGenerationTarget ? '取消' : `取消 #${generationTask?.floor}` }}
                   </button>
-                  <button
-                    v-if="ui.stage === 'annotate'"
-                    class="bby-button bby-primary"
-                    type="button"
-                    :disabled="generating || replacing || !hasInstructions"
-                    @click="startReview"
-                  >
-                    <Icon :name="viewingGenerationTarget ? 'refresh' : 'bolt'" :class="{ 'bby-spin': viewingGenerationTarget }" />
-                    {{ generationButtonLabel }}
-                  </button>
+                  <template v-if="ui.stage === 'annotate'">
+                    <template v-if="workMode === 'edit'">
+                      <button class="bby-button" type="button" :disabled="saving || replacing" @click="discardManualEdit">
+                        <Icon name="undo" /> 放弃修改
+                      </button>
+                      <button
+                        class="bby-button bby-primary"
+                        type="button"
+                        :disabled="saving || replacing || generating || !editDirty"
+                        @click="saveManualEdit"
+                      >
+                        <Icon name="check" /> {{ saving ? '保存中…' : '保存到楼层' }}
+                      </button>
+                    </template>
+                    <button
+                      v-else
+                      class="bby-button bby-primary"
+                      type="button"
+                      :disabled="generating || replacing || !hasInstructions"
+                      @click="startReview"
+                    >
+                      <Icon :name="viewingGenerationTarget ? 'refresh' : 'bolt'" :class="{ 'bby-spin': viewingGenerationTarget }" />
+                      {{ generationButtonLabel }}
+                    </button>
+                  </template>
                   <template v-else>
                     <button class="bby-button" type="button" :disabled="generating || replacing" @click="startReview">
                       <Icon name="refresh" :class="{ 'bby-spin': viewingGenerationTarget }" /> {{ generationButtonLabel }}
                     </button>
                     <button class="bby-button bby-primary" type="button" :disabled="generating || saving || replacing" @click="finishReview">
                       <Icon :name="acceptedCount === 0 ? 'trash' : 'check'" />
-                      {{ saving ? '保存中…' : acceptedCount === 0 ? '丢弃全部' : `应用 ${acceptedCount} 行` }}
+                      {{ applyButtonLabel }}
                     </button>
                   </template>
                 </div>

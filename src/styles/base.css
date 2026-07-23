@@ -237,6 +237,32 @@
   font-weight: 700;
 }
 
+/* 状态条左侧信息组:楼层号 + 进度同行排列 */
+.bby-strip-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* 标注/编辑模式切换:嵌在状态条右端的小号分段 */
+.bby-mode-switch {
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+}
+
+.bby-mode-switch .bby-seg {
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.bby-mode-switch .bby-seg:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* 折叠角标:整体要求已填=小圆点;查找替换启用数=小号计数 */
 .bby-tab-dot {
   flex: 0 0 auto;
@@ -583,6 +609,22 @@
 
 .bby-para-text:disabled {
   cursor: default;
+}
+
+/* 手动编辑态:段落原位变成输入框,排版与阅读态一致;焦点由左缘色条呼应,不另加边框 */
+.bby-para-edit {
+  display: block;
+  resize: none;
+  overflow: hidden;
+  font-family: inherit;
+}
+
+.bby-para-edit:focus {
+  outline: none;
+}
+
+.bby-para:focus-within::before {
+  background: var(--bby-accent);
 }
 
 /* 已标注的要求摘要(收起态):小标签列出所选快捷语句 */
@@ -1211,6 +1253,45 @@
   color: var(--bby-ink-muted);
   font-size: 10px;
   font-weight: 650;
+}
+
+/* 审阅行手改入口:行头右端的小铅笔,去掉外框以免压过行头文字 */
+.bby-row-edit {
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+/* 「已手改」标记:与分类标签拉开色相,用警示色软底 */
+.bby-tag-edited {
+  background: var(--bby-warning-soft);
+  color: var(--bby-warning);
+}
+
+/* 审阅结果内联编辑框:原地替换结果文本,视觉与原段落对齐,焦点用下划色条提示 */
+.bby-result-edit {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  resize: none;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.bby-result-edit:focus {
+  outline: none;
+  box-shadow: 0 1px 0 var(--bby-accent);
+}
+
+.bby-result-edit-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 4px;
 }
 
 .bby-error-message {

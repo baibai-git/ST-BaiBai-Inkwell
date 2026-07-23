@@ -1,4 +1,4 @@
-import { getContext, type STContext, type STMessage } from '@/st/context';
+import { getContext, setMessageText, type STContext, type STMessage } from '@/st/context';
 import { openPen } from '@/state/ui';
 
 function findMessage(floor: number): HTMLElement | null {
@@ -32,13 +32,6 @@ export function openFloorInPen(floor: number): boolean {
 
 export type ApplyFloorResult = 'saved' | 'chat-changed' | 'floor-changed' | 'unavailable';
 
-interface STScriptModule {
-  updateMessageElement?: (
-    message: STMessage,
-    options: { messageId: number },
-  ) => unknown;
-}
-
 async function emitMessageEvent(
   context: STContext,
   event: unknown,
@@ -57,17 +50,19 @@ async function refreshRenderedMessage(
   const existing = findMessage(floor);
   if (!existing) return;
 
-  try {
-    const path = '/script.js';
-    const st = (await import(/* @vite-ignore */ path)) as STScriptModule;
-    if (typeof st.updateMessageElement !== 'function') {
-      throw new Error('ST message renderer unavailable');
+  if (typeof context.updateMessageBlock === 'function') {
+    try {
+      await context.updateMessageBlock(floor, message);
+      return;
+    } catch {
+      // 局部刷新失败时回退到完整重载。
     }
-    const replacement = st.updateMessageElement(message, { messageId: floor });
-    $(existing).after(replacement);
-    existing.remove();
-  } catch {
+  }
+
+  try {
     await context.reloadCurrentChat?.();
+  } catch (error) {
+    console.warn('[柏宝砚] 楼层已保存，但界面刷新失败', error);
   }
 }
 
@@ -94,29 +89,37 @@ export async function applyFloorText(
 
   const previousText = message.mes;
   const currentSwipe =
-    Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)
-      ? message.swipe_id
+    Array.isArray(message.swipes)
+      ? typeof message.swipe_id === 'number'
+        ? message.swipe_id
+        : 0
       : undefined;
   const previousSwipeText =
     currentSwipe !== undefined ? message.swipes?.[currentSwipe] : undefined;
 
-  message.mes = nextText;
-  if (currentSwipe !== undefined && message.swipes) {
-    message.swipes[currentSwipe] = nextText;
-  }
+  setMessageText(message, nextText);
 
   try {
-    await emitMessageEvent(context, context.eventTypes?.MESSAGE_EDITED, floor);
-    await refreshRenderedMessage(context, message, floor);
-    await emitMessageEvent(context, context.eventTypes?.MESSAGE_UPDATED, floor);
     await context.saveChat();
-    return 'saved';
   } catch (error) {
     message.mes = previousText;
-    if (currentSwipe !== undefined && message.swipes) {
+    if (
+      currentSwipe !== undefined &&
+      message.swipes &&
+      currentSwipe >= 0 &&
+      currentSwipe < message.swipes.length
+    ) {
       message.swipes[currentSwipe] = previousSwipeText ?? previousText;
     }
-    await refreshRenderedMessage(context, message, floor).catch(() => undefined);
     throw error;
   }
+
+  await emitMessageEvent(context, context.eventTypes?.MESSAGE_EDITED, floor).catch(error => {
+    console.warn('[柏宝砚] 楼层已保存，但 MESSAGE_EDITED 事件发送失败', error);
+  });
+  await refreshRenderedMessage(context, message, floor);
+  await emitMessageEvent(context, context.eventTypes?.MESSAGE_UPDATED, floor).catch(error => {
+    console.warn('[柏宝砚] 楼层已保存，但 MESSAGE_UPDATED 事件发送失败', error);
+  });
+  return 'saved';
 }

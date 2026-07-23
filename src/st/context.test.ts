@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getOpenChatId, getOpenChatIdentity, type STContext } from '@/st/context';
+import { getOpenChatId, getOpenChatIdentity, setMessageText, type STContext } from '@/st/context';
 
 function contextWithChatId(chatId: string | undefined): STContext {
   return {
@@ -31,5 +31,40 @@ describe('open chat detection', () => {
     const groupContext = contextWithChatId('chat-a');
     groupContext.groupId = 'group-1';
     expect(getOpenChatIdentity(groupContext)).toBe('group:group-1\u0000chat-a');
+  });
+});
+
+describe('setMessageText', () => {
+  it('does not create swipes for a message without swipes', () => {
+    const message = { name: 'Char', is_user: false, is_system: false, mes: 'old' };
+    setMessageText(message, 'new');
+    expect(message.mes).toBe('new');
+    expect('swipes' in message).toBe(false);
+  });
+
+  it('updates the first swipe when swipe_id is absent', () => {
+    const message = {
+      name: 'Char',
+      is_user: false,
+      is_system: false,
+      mes: 'old',
+      swipes: ['old'],
+    };
+    setMessageText(message, 'new');
+    expect(message.mes).toBe('new');
+    expect(message.swipes).toEqual(['new']);
+  });
+
+  it('updates only the selected swipe', () => {
+    const message = {
+      name: 'Char',
+      is_user: false,
+      is_system: false,
+      mes: 'second',
+      swipe_id: 1,
+      swipes: ['first', 'second'],
+    };
+    setMessageText(message, 'updated');
+    expect(message.swipes).toEqual(['first', 'updated']);
   });
 });

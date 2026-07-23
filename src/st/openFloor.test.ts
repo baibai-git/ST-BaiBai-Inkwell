@@ -56,9 +56,17 @@ describe('floor access without rendered messages', () => {
     expect(getFloorSourceText(0)).toBe('编辑器中的正文');
   });
 
-  it('updates the message, current swipe, events, and persisted chat', async () => {
-    const emit = vi.fn(async () => undefined);
-    const saveChat = vi.fn(async () => undefined);
+  it('persists before refreshing the message and emitting update events', async () => {
+    const actions: string[] = [];
+    const emit = vi.fn(async (event: string) => {
+      actions.push(event);
+    });
+    const saveChat = vi.fn(async () => {
+      actions.push('save');
+    });
+    const updateMessageBlock = vi.fn(() => {
+      actions.push('refresh');
+    });
     const message = {
       name: '角色',
       is_user: false,
@@ -71,11 +79,17 @@ describe('floor access without rendered messages', () => {
       chat: [message],
       getCurrentChatId: () => 'chat-a',
       saveChat,
+      updateMessageBlock,
       eventSource: { emit },
       eventTypes: {
         MESSAGE_EDITED: 'edited',
         MESSAGE_UPDATED: 'updated',
       },
+    });
+    vi.stubGlobal('document', {
+      querySelector: vi.fn(() => ({
+        querySelector: vi.fn(() => null),
+      })),
     });
 
     await expect(applyFloorText(0, '原文', '新正文', 'chat-a')).resolves.toBe('saved');
@@ -84,6 +98,55 @@ describe('floor access without rendered messages', () => {
     expect(emit).toHaveBeenNthCalledWith(1, 'edited', 0);
     expect(emit).toHaveBeenNthCalledWith(2, 'updated', 0);
     expect(saveChat).toHaveBeenCalledOnce();
+    expect(updateMessageBlock).toHaveBeenCalledWith(0, message);
+    expect(actions).toEqual(['save', 'edited', 'refresh', 'updated']);
+  });
+
+  it('updates swipes[0] when an old message has no swipe_id', async () => {
+    const message = {
+      name: '角色',
+      is_user: false,
+      is_system: false,
+      mes: '原文',
+      swipes: ['原文'],
+    };
+    installContext({
+      chat: [message],
+      getCurrentChatId: () => 'chat-a',
+      saveChat: vi.fn(async () => undefined),
+    });
+
+    await expect(applyFloorText(0, '原文', '新正文', 'chat-a')).resolves.toBe('saved');
+    expect(message.mes).toBe('新正文');
+    expect(message.swipes).toEqual(['新正文']);
+  });
+
+  it('saves before falling back to a full chat reload on older ST versions', async () => {
+    const actions: string[] = [];
+    const message = {
+      name: '角色',
+      is_user: false,
+      is_system: false,
+      mes: '原文',
+    };
+    installContext({
+      chat: [message],
+      getCurrentChatId: () => 'chat-a',
+      saveChat: vi.fn(async () => {
+        actions.push('save');
+      }),
+      reloadCurrentChat: vi.fn(async () => {
+        actions.push('reload');
+      }),
+    });
+    vi.stubGlobal('document', {
+      querySelector: vi.fn(() => ({
+        querySelector: vi.fn(() => null),
+      })),
+    });
+
+    await expect(applyFloorText(0, '原文', '新正文', 'chat-a')).resolves.toBe('saved');
+    expect(actions).toEqual(['save', 'reload']);
   });
 
   it('rolls back the message and current swipe when saving fails', async () => {

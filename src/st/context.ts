@@ -29,6 +29,11 @@ export interface STContext {
   saveSettingsDebounced?: () => void;
   saveChat?: () => Promise<void>;
   reloadCurrentChat?: () => Promise<void>;
+  updateMessageBlock?: (
+    messageId: number,
+    message: STMessage,
+    options?: { rerenderMessage?: boolean },
+  ) => unknown;
   eventSource?: {
     on?: (event: unknown, handler: (...args: unknown[]) => void) => void;
     off?: (event: unknown, handler: (...args: unknown[]) => void) => void;
@@ -82,6 +87,22 @@ export function getContext(): STContext | null {
     return window.SillyTavern?.getContext?.() ?? null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * 更新消息正文时同步当前 swipe。
+ *
+ * ST 的保存格式可能同时保留 `mes` 与 `swipes[swipe_id]`。不主动创建 swipes；
+ * 仅在消息已有 swipes 时同步当前页，缺少 swipe_id 时按第一页处理。
+ */
+export function setMessageText(message: STMessage | undefined, text: string): void {
+  if (!message) return;
+  message.mes = text;
+  if (!Array.isArray(message.swipes)) return;
+  const index = typeof message.swipe_id === 'number' ? message.swipe_id : 0;
+  if (index >= 0 && index < message.swipes.length) {
+    message.swipes[index] = text;
   }
 }
 

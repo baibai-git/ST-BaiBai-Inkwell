@@ -3,9 +3,9 @@
   "loading_order": 101,
   "requires": [],
   "optional": [],
-  "js": "dist/index.js?ver=0.2.3",
+  "js": "dist/index.js?ver=0.3.0",
   "author": "柏柏",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "homePage": "https://github.com/baibai-git/ST-BaiBai-Inkwell",
   "auto_update": false,
   "minimum_client_version": "1.12.13"

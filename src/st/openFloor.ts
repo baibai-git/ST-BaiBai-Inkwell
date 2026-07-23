@@ -9,6 +9,25 @@ function activeEditorText(floor: number): string | null {
   return findMessage(floor)?.querySelector<HTMLTextAreaElement>('#curEditTextarea')?.value ?? null;
 }
 
+/**
+ * 保存源自 ST 原生编辑框的改写时，先把最终文本同步回编辑框，再让 ST
+ * 通过“取消编辑”流程收尾。此时 chat.mes 已经保存为新文本，所以取消按钮
+ * 只负责重绘和清理内部编辑状态，不会撤销改写，也不会再次执行编辑正则。
+ *
+ * 旧版 ST 若没有取消按钮，则保留已同步的 textarea，交给用户随后正常完成；
+ * 关键是不能调用 updateMessageBlock 提前删掉 textarea，否则 ST 会退回读取
+ * 渲染后的 .mes_text.text()，导致 HTML、换行和空白丢失。
+ */
+function settleActiveEditor(floor: number, text: string): boolean {
+  const message = findMessage(floor);
+  const editor = message?.querySelector<HTMLTextAreaElement>('#curEditTextarea');
+  if (!message || !editor) return false;
+
+  editor.value = text;
+  message.querySelector<HTMLElement>('.mes_edit_cancel')?.click();
+  return true;
+}
+
 export function getFloorSourceText(floor: number): string | null {
   const message = getContext()?.chat?.[floor];
   if (!message) return null;
@@ -117,9 +136,11 @@ export async function applyFloorText(
   await emitMessageEvent(context, context.eventTypes?.MESSAGE_EDITED, floor).catch(error => {
     console.warn('[柏宝砚] 楼层已保存，但 MESSAGE_EDITED 事件发送失败', error);
   });
-  await refreshRenderedMessage(context, message, floor);
-  await emitMessageEvent(context, context.eventTypes?.MESSAGE_UPDATED, floor).catch(error => {
-    console.warn('[柏宝砚] 楼层已保存，但 MESSAGE_UPDATED 事件发送失败', error);
-  });
+  if (!settleActiveEditor(floor, message.mes)) {
+    await refreshRenderedMessage(context, message, floor);
+    await emitMessageEvent(context, context.eventTypes?.MESSAGE_UPDATED, floor).catch(error => {
+      console.warn('[柏宝砚] 楼层已保存，但 MESSAGE_UPDATED 事件发送失败', error);
+    });
+  }
   return 'saved';
 }

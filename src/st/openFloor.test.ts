@@ -102,6 +102,94 @@ describe('floor access without rendered messages', () => {
     expect(actions).toEqual(['save', 'edited', 'refresh', 'updated']);
   });
 
+  it('settles an active ST editor without flattening HTML or line breaks', async () => {
+    const actions: string[] = [];
+    const nextText = '<section>\n\n  <p>保留格式</p>\n</section>';
+    const editor = { value: '原文' };
+    const cancel = {
+      click: vi.fn(() => {
+        actions.push('cancel');
+      }),
+    };
+    const messageElement = {
+      querySelector: vi.fn((selector: string) => {
+        if (selector === '#curEditTextarea') return editor;
+        if (selector === '.mes_edit_cancel') return cancel;
+        return null;
+      }),
+    };
+    const updateMessageBlock = vi.fn(() => {
+      actions.push('refresh');
+    });
+    const emit = vi.fn(async (event: string) => {
+      actions.push(event);
+    });
+    const message = {
+      name: '角色',
+      is_user: false,
+      is_system: false,
+      mes: '原文',
+      swipes: ['原文'],
+      swipe_id: 0,
+    };
+    installContext({
+      chat: [message],
+      getCurrentChatId: () => 'chat-a',
+      saveChat: vi.fn(async () => {
+        actions.push('save');
+      }),
+      updateMessageBlock,
+      eventSource: { emit },
+      eventTypes: {
+        MESSAGE_EDITED: 'edited',
+        MESSAGE_UPDATED: 'updated',
+      },
+    });
+    vi.stubGlobal('document', {
+      querySelector: vi.fn(() => messageElement),
+    });
+
+    await expect(applyFloorText(0, '原文', nextText, 'chat-a')).resolves.toBe('saved');
+    expect(message.mes).toBe(nextText);
+    expect(message.swipes).toEqual([nextText]);
+    expect(editor.value).toBe(nextText);
+    expect(cancel.click).toHaveBeenCalledOnce();
+    expect(updateMessageBlock).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledWith('edited', 0);
+    expect(actions).toEqual(['save', 'edited', 'cancel']);
+  });
+
+  it('keeps a synchronized editor intact when an older ST has no cancel button', async () => {
+    const nextText = '<div>\n第一行\n\n第二行\n</div>';
+    const editor = { value: '原文' };
+    const messageElement = {
+      querySelector: vi.fn((selector: string) =>
+        selector === '#curEditTextarea' ? editor : null,
+      ),
+    };
+    const updateMessageBlock = vi.fn();
+    const message = {
+      name: '角色',
+      is_user: false,
+      is_system: false,
+      mes: '原文',
+    };
+    installContext({
+      chat: [message],
+      getCurrentChatId: () => 'chat-a',
+      saveChat: vi.fn(async () => undefined),
+      updateMessageBlock,
+    });
+    vi.stubGlobal('document', {
+      querySelector: vi.fn(() => messageElement),
+    });
+
+    await expect(applyFloorText(0, '原文', nextText, 'chat-a')).resolves.toBe('saved');
+    expect(editor.value).toBe(nextText);
+    expect(updateMessageBlock).not.toHaveBeenCalled();
+  });
+
   it('updates swipes[0] when an old message has no swipe_id', async () => {
     const message = {
       name: '角色',

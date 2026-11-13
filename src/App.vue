@@ -590,7 +590,7 @@ async function onDeleteFloor(floor: number): Promise<void> {
   }
 }
 
-/* —— 楼层截图:深度 0 重渲染 + 酒馆助手 iframe 实况合成,导出 PNG —— */
+/* —— 楼层截图:深度 0 重渲染 + 酒馆助手 iframe 实况合成,导出图片 —— */
 const shootingFloor = ref<number | null>(null);
 
 async function onShootFloor(floor: number): Promise<void> {
@@ -598,6 +598,8 @@ async function onShootFloor(floor: number): Promise<void> {
   shootingFloor.value = floor;
   showToast(`正在生成第 ${floor} 层截图…`);
   try {
+    // 截图一开始就占住主线程,先把提示框和按钮状态画出来再开截,否则提示框要等截完才出现
+    await waitForToastPaint();
     const { blob, outcome } = await captureFloorShot(floor);
     downloadBlob(blob, outcome.suggestedName);
     if (outcome.frontendBlocks > outcome.iframesCaptured) {
@@ -1094,6 +1096,17 @@ function showToast(message: string): void {
   window.setTimeout(() => {
     if (toastText.value === message) toastText.value = '';
   }, 2200);
+}
+
+/**
+ * 等提示框真正画出来:nextTick 后节点已插入,但 <Transition> 的进入动画隔两帧(双 rAF)才开始,
+ * 所以再等两帧;rAF 里排的宏任务要等这一帧画完才执行。动画开始后 opacity/transform 由合成线程推进,主线程忙也能播完
+ */
+async function waitForToastPaint(): Promise<void> {
+  await nextTick();
+  await new Promise<void>(resolve =>
+    requestAnimationFrame(() => requestAnimationFrame(() => window.setTimeout(resolve, 0))),
+  );
 }
 
 const excludeParamsText = computed<string>({

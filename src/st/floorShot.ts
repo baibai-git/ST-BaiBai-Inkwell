@@ -7,24 +7,19 @@
  * 2. 克隆真实楼层节点(保留头像/名字/主题样式),换入重渲染的正文;
  * 3. 酒馆助手渲染的 iframe(TH-message--楼层--序号,同源无 sandbox)逐个抓成图片,
  *    按顺序替换正文里的前端代码块;
- * 4. 挂进主文档的屏外容器(借 #chat 的主题选择器),snapdom 栅格化成 PNG 下载。
+ * 4. 挂进主文档的屏外容器(借 #chat 的主题选择器),snapdom 栅格化成 PNG/JPEG 下载。
  */
 import { getContext, type STContext, type STMessage } from '@/st/context';
 import type { SnapdomFn } from '@/vendor/snapdom.js';
 
 /* snapdom 约 150kB,只在第一次截图时按需加载,不进主包 */
 let snapdomPromise: Promise<SnapdomFn> | null = null;
-let warmedUp = false;
 
 function loadSnapdom(): Promise<SnapdomFn> {
-  snapdomPromise ??= import('@/vendor/snapdom.js').then(module => {
-    // 后台预热字体/背景图缓存:字体内联是截图耗时大头,预热后后续截图直接命中缓存
-    if (!warmedUp) {
-      warmedUp = true;
-      void module.preCache(document.body, { embedFonts: true }).catch(() => undefined);
-    }
-    return module.snapdom;
-  });
+  // 不做 preCache(document.body) 预热:它要遍历整个页面、下载页面用到的全部字体分片,
+  // 正好和首次截图抢主线程和网络,反而更慢。
+  // 字体内联的卡顿/慢主要在 snapdom 内部,vendor 里打了补丁,见 src/vendor/snapdom.js 顶部 bby-patch 说明。
+  snapdomPromise ??= import('@/vendor/snapdom.js').then(module => module.snapdom);
   return snapdomPromise;
 }
 
@@ -190,6 +185,38 @@ interface LiveIframe {
   frame: HTMLIFrameElement;
 }
 
+/**
+ * 克隆里和页面上一字不差的 <style> 删掉:<style> 放在哪都对整页生效,真实楼层(或别的楼层)那份已经在起作用,
+ * 克隆里的副本多余;挂进页面还会让整页重新算样式、重新排版,副本里 @import 的字体再登记一遍,
+ * 已加载的字体分片重新下载、截图期间卡好几下。带 @scope 的只对所在位置生效,不删。
+ */
+function dropDuplicateStyles(root: HTMLElement): void {
+  const key = (style: HTMLStyleElement) => `${style.media}\n${style.textContent ?? ''}`;
+  const copies = [...root.querySelectorAll('style')].filter(style => !style.textContent?.includes('@scope'));
+  if (!copies.length) return;
+  const live = new Set<string>();
+  for (const style of document.querySelectorAll('style')) {
+    if (style.sheet && !style.sheet.disabled) live.add(key(style));
+  }
+  for (const style of copies) {
+    if (live.has(key(style))) style.remove();
+  }
+}
+
+/**
+ * 收起的 <details>(思维链、美化里的折叠面板)截图里只显示标题行,正文本来就看不见,直接从克隆上删掉。
+ * 留着的话,量溢出、snapdom 遍历时浏览器会把收起的正文排版一遍,正文用到的字体分片全部开始下载,
+ * 截图要等它们下完,还会白白内联进图片。
+ */
+function dropCollapsedContent(root: HTMLElement): void {
+  for (const details of root.querySelectorAll('details:not([open])')) {
+    const summary = details.querySelector(':scope > summary');
+    for (const node of [...details.childNodes]) {
+      if (node !== summary) node.remove();
+    }
+  }
+}
+
 /* 资源就绪的最长等待:超时后按当前状态开截,坏图/慢字体不至于卡死截图 */
 const SETTLE_TIMEOUT_MS = 3000;
 
@@ -221,6 +248,9 @@ async function settleClone(host: HTMLElement, clone: HTMLElement): Promise<void>
 
   const images = [...clone.querySelectorAll('img')];
   for (const image of images) image.loading = 'eager';
+  // 先排一次版再读 fonts.ready:浏览器排版时才开始加载克隆用到的字体分片,没排版就读会立刻放行
+  // (Chrome 读 fonts.ready 时会自己排版,别的浏览器不一定)。截图内联字体只认加载过的分片,见 vendor/snapdom.js 的 bby-patch G
+  clone.getBoundingClientRect();
   const ready = Promise.all([
     ...images.map(image => image.decode().catch(() => undefined)),
     document.fonts?.ready.then(() => undefined).catch(() => undefined) ?? Promise.resolve(),
@@ -251,41 +281,37 @@ async function composeIframes(
   const frontendPres = [...mesText.querySelectorAll('pre')].filter(pre =>
     isFrontendCode(pre.textContent ?? ''),
   );
-  // 各 iframe 相互独立,并行抓取;字体照常内联(美化常用自定义字体),靠 snapdom 缓存提速
-  const results = await Promise.all(
-    frontendPres.map(async (pre, order) => {
-      const live = liveFrames[order]?.frame;
-      const root = live?.contentDocument?.body ?? null;
-      if (!live || !root) return false;
-      try {
-        const canvas = await snapdom.toCanvas(root, {
-          embedFonts: true,
-          backgroundColor: null,
-          compress: true,
-        });
-        const img = document.createElement('img');
-        img.src = canvas.toDataURL('image/png');
-        img.style.width = `${live.clientWidth || live.offsetWidth || 0}px` || '100%';
-        img.style.height = 'auto';
-        img.style.display = 'block';
-        pre.replaceWith(img);
-        return true;
-      } catch {
-        // 单个 iframe 抓取失败不拖垮整张截图,保留代码块
-        return false;
-      }
-    }),
-  );
+  // 必须逐个抓:snapdom 的会话缓存(styleMap/nodeMap)是全局的,并行截图会互相覆盖。
+  // 字体照常内联(美化常用自定义字体);toPng 内部走 canvas.toBlob 异步编码,
+  // 不像 toDataURL 那样同步编码整张 PNG 卡住页面
+  let captured = 0;
+  for (const [order, pre] of frontendPres.entries()) {
+    const live = liveFrames[order]?.frame;
+    const root = live?.contentDocument?.body ?? null;
+    // 收起的 <details> 里的看不见,挂载前会被 dropCollapsedContent 删掉,不必抓
+    if (!live || !root || pre.closest('details:not([open])')) continue;
+    try {
+      const img = await snapdom.toPng(root, {
+        embedFonts: true,
+        backgroundColor: null,
+        compress: true,
+      });
+      const width = live.clientWidth || live.offsetWidth;
+      img.style.width = width ? `${width}px` : '100%';
+      img.style.height = 'auto';
+      img.style.display = 'block';
+      pre.replaceWith(img);
+      captured++;
+    } catch {
+      // 单个 iframe 抓取失败不拖垮整张截图,保留代码块
+    }
+  }
   return {
     frontendBlocks: frontendPres.length,
-    captured: results.filter(Boolean).length,
+    captured,
   };
 }
 
-/**
- * 截取指定楼层为 PNG blob。
- * 返回 blob 与统计信息;调用方负责下载与用户提示。
- */
 /* 溢出补偿上限:防异常定位把画布撑到离谱的尺寸 */
 const MAX_OVERFLOW_PX = 600;
 
@@ -306,6 +332,9 @@ function measureOverflow(clone: HTMLElement): {
   let bottom = 0;
   let left = 0;
   for (const el of clone.querySelectorAll<HTMLElement>('*')) {
+    // 隐藏区域(content-visibility:hidden、display:none 等)里的元素不量:
+    // 对它们调 getBoundingClientRect 会逼浏览器把隐藏内容排版一遍、下载它用到的字体
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
     const style = getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden') continue;
     // fixed 元素坐标相对视口,在屏外容器里无意义;overflow 裁剪内的溢出画不出来,不补
@@ -321,6 +350,10 @@ function measureOverflow(clone: HTMLElement): {
   return { top: clamp(top), right: clamp(right), bottom: clamp(bottom), left: clamp(left) };
 }
 
+/**
+ * 截取指定楼层为图片 blob。
+ * 返回 blob 与统计信息;调用方负责下载与用户提示。
+ */
 export async function captureFloorShot(
   floor: number,
 ): Promise<{ blob: Blob; outcome: FloorShotOutcome }> {
@@ -372,6 +405,8 @@ export async function captureFloorShot(
     'pointer-events:none',
     'contain:layout',
   ].join(';');
+  dropCollapsedContent(clone);
+  dropDuplicateStyles(clone);
   host.appendChild(clone);
   document.body.appendChild(host);
 
